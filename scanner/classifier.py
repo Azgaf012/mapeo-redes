@@ -20,6 +20,15 @@ def is_access_point_identity(hostname="", snmp_info=None):
                for name in names)
 
 
+def classify_lldp_neighbor(neighbor):
+    """Use a neighbor's advertised identity, not the switch vendor or uplink port."""
+    description = neighbor.get("description") or ""
+    if "wlan_access_point" in (neighbor.get("capabilities") or []) and "controller" not in description.lower():
+        return "ACCESS_POINT"
+    return classify_device("", hostname=neighbor.get("neighbor_name") or "",
+                           snmp_info={"sys_descr": description})
+
+
 def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gateway=False, snmp_info=None):
     """
     Applies heuristic scoring rules to classify an endpoint into one of:

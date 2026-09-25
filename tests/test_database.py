@@ -84,6 +84,30 @@ def test_device_upsert_and_manual_preservation(temp_db):
     assert dev_final["description"] == "Switch de distribución principal"
     assert dev_final["is_manual"] == 1
 
+
+def test_rescan_clears_old_synthetic_phone_identity_but_keeps_real_name(temp_db):
+    devices = DeviceRepository(temp_db)
+    site_id = SiteRepository(temp_db).get_all()[0]["id"]
+    stale_id = devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.80", "hostname": "Celular / Móvil",
+        "model": "Smartphone (MAC Privada)", "device_type": "PHONE"})
+    named_id = devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.81", "hostname": "PC-BIBLIOTECA",
+        "model": "ThinkPad T14", "device_type": "PC"})
+    aruba_id = devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.82", "model": "Aruba AP (modelo sin confirmar)",
+        "device_type": "ACCESS_POINT"})
+
+    devices.upsert_discovered(site_id, {"ip": "192.168.50.80", "device_type": "UNKNOWN"})
+    devices.upsert_discovered(site_id, {"ip": "192.168.50.81", "device_type": "UNKNOWN"})
+    devices.upsert_discovered(site_id, {"ip": "192.168.50.82", "device_type": "UNKNOWN"})
+
+    assert devices.get_by_id(stale_id)["hostname"] == ""
+    assert devices.get_by_id(stale_id)["model"] == ""
+    assert devices.get_by_id(named_id)["hostname"] == "PC-BIBLIOTECA"
+    assert devices.get_by_id(named_id)["model"] == "ThinkPad T14"
+    assert devices.get_by_id(aruba_id)["model"] == ""
+
 def test_connection_management(temp_db):
     site_repo = SiteRepository(temp_db)
     dev_repo = DeviceRepository(temp_db)

@@ -6,21 +6,23 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 
 from repositories.network_detail_repository import NetworkDetailRepository
+from repositories.ap_association_repository import ApAssociationRepository
 from repositories.network_repository import NetworkRepository
 from scanner.network import get_local_connection_medium, get_routing_ip
 
 
 class TopologyService:
     def __init__(self, device_repo, connection_repo, site_repo,
-                 network_repo=None, detail_repo=None):
+                 network_repo=None, detail_repo=None, ap_association_repo=None):
         self.device_repo = device_repo
         self.connection_repo = connection_repo
         self.site_repo = site_repo
         self.network_repo = network_repo or NetworkRepository(device_repo.db_path)
         self.detail_repo = detail_repo or NetworkDetailRepository(device_repo.db_path)
+        self.ap_association_repo = ap_association_repo or ApAssociationRepository(device_repo.db_path)
 
     def _mac_associations(self, site_id, devices):
-        """Associate MACs with unique switch ports or recently observed AP radios."""
+        """Associate MACs using switch ports, AP radios, or a recent imported snapshot."""
         def normalized(mac):
             return "".join(char for char in (mac or "").upper() if char in "0123456789ABCDEF")
 
@@ -88,6 +90,31 @@ class TopologyService:
                 "observed_at": ap["observed_at"],
                 "evidence": "MAC observada en radio del AP; no confirma asociación Wi-Fi actual.",
             }
+        devices_by_mac = defaultdict(list)
+        for device in devices:
+            devices_by_mac[normalized(device.get("mac"))].append(device)
+        for row in self.ap_association_repo.get_by_site(site_id):
+            try:
+                observed = datetime.fromisoformat(row["observed_at"])
+                if observed.tzinfo:
+                    observed = observed.astimezone(timezone.utc).replace(tzinfo=None)
+            except (TypeError, ValueError):
+                continue
+            if observed < cutoff:
+                continue
+            ap_device = visible_aps.get(row["ap_device_id"])
+            if not ap_device:
+                continue
+            for device in devices_by_mac.get(row["client_mac"], []):
+                if device["id"] == ap_device["id"]:
+                    continue
+                ap_associations[device["id"]] = {
+                    "ap_id": str(ap_device["id"]),
+                    "ap_name": ap_device["hostname"] or ap_device["ip"],
+                    "observed_at": row["observed_at"],
+                    "source": "ap_client_csv",
+                    "evidence": "Asociación cliente–AP declarada en CSV; la fecha indica cuándo se importó.",
+                }
         return switch_associations, ap_associations
 
     def get_cytoscape_data(self, site_id, network_cidr=None, view="physical",
@@ -124,6 +151,10 @@ class TopologyService:
         )
         physical_links = self.detail_repo.get_links(site_id)
         medium_by_id = {}
+        for device_id, association in ap_associations.items():
+            if association.get("source") == "ap_client_csv":
+                medium_by_id[device_id] = (
+                    "WIFI", f"Asociación con AP importada el {association['observed_at']}.")
         for link in physical_links:
             if link["protocol"] not in ("LLDP", "CDP"):
                 continue

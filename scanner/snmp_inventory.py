@@ -1,14 +1,17 @@
 """Read standard SNMP tables for a single managed device."""
 
 import asyncio
+import ipaddress
 
 
 OIDS = {
     "sys_descr": "1.3.6.1.2.1.1.1.0",
+    "sys_object_id": "1.3.6.1.2.1.1.2.0",
     "sys_name": "1.3.6.1.2.1.1.5.0",
     "sys_uptime": "1.3.6.1.2.1.1.3.0",
     "ent_serial": "1.3.6.1.2.1.47.1.1.1.1.11",
     "ent_model": "1.3.6.1.2.1.47.1.1.1.1.13",
+    "ent_class": "1.3.6.1.2.1.47.1.1.1.1.5",
     "if_name": "1.3.6.1.2.1.31.1.1.1.1",
     "if_descr": "1.3.6.1.2.1.2.2.1.2",
     "if_mac": "1.3.6.1.2.1.2.2.1.6",
@@ -23,6 +26,11 @@ OIDS = {
     "lldp_local_port": "1.0.8802.1.1.2.1.3.7.1.3",
     "lldp_name": "1.0.8802.1.1.2.1.4.1.1.9",
     "lldp_port": "1.0.8802.1.1.2.1.4.1.1.7",
+    "lldp_description": "1.0.8802.1.1.2.1.4.1.1.10",
+    "lldp_chassis_subtype": "1.0.8802.1.1.2.1.4.1.1.4",
+    "lldp_chassis_id": "1.0.8802.1.1.2.1.4.1.1.5",
+    "lldp_capabilities": "1.0.8802.1.1.2.1.4.1.1.12",
+    "lldp_management_if": "1.0.8802.1.1.2.1.4.2.1.3",
     "cdp_name": "1.3.6.1.4.1.9.9.23.1.2.1.1.6",
     "cdp_port": "1.3.6.1.4.1.9.9.23.1.2.1.1.7",
 }
@@ -54,6 +62,45 @@ def _ports_from_bitmap(value):
         for bit in range(8)
         if byte & (0x80 >> bit)
     }
+
+
+def _hardware_identity(tables):
+    classes = tables.get("ent_class", {})
+    models = tables.get("ent_model", {})
+    serials = tables.get("ent_serial", {})
+    indices = sorted(set(models) | set(serials), key=lambda value: int(value.split(".")[0]))
+    for hardware_class in (3, 11, 9):
+        chassis = [index for index in indices if _number(classes.get(index)) == hardware_class]
+        if chassis:
+            index = chassis[0]
+            return _text(models.get(index) or ""), _text(serials.get(index) or "")
+    model = next((_text(models[index]) for index in indices if models.get(index)
+                  and _text(models[index]).strip()), "")
+    serial = next((_text(serials[index]) for index in indices if serials.get(index)
+                   and _text(serials[index]).strip()), "")
+    return model, serial
+
+
+def _lldp_management_ips(tables):
+    addresses = {}
+    for suffix in tables.get("lldp_management_if", {}):
+        parts = suffix.split(".")
+        if len(parts) < 9 or parts[3:5] != ["1", "4"]:
+            continue
+        try:
+            address = str(ipaddress.IPv4Address(bytes(int(part) for part in parts[5:9])))
+        except (ValueError, TypeError):
+            continue
+        addresses.setdefault(".".join(parts[:3]), set()).add(address)
+    return addresses
+
+
+def _lldp_capabilities(value):
+    names = ("other", "repeater", "bridge", "wlan_access_point", "router",
+             "telephone", "docsis_cable", "station")
+    raw = value.asOctets() if hasattr(value, "asOctets") else b""
+    return [name for index, name in enumerate(names)
+            if len(raw) > index // 8 and raw[index // 8] & (0x80 >> (index % 8))]
 
 
 def build_inventory(tables):
@@ -107,14 +154,25 @@ def build_inventory(tables):
     local_ports = {suffix: _text(value)
                    for suffix, value in tables.get("lldp_local_port", {}).items()}
     neighbors = []
-    for suffix, name in tables.get("lldp_name", {}).items():
+    management_ips = _lldp_management_ips(tables)
+    lldp_keys = ("lldp_name", "lldp_port", "lldp_description", "lldp_chassis_id",
+                 "lldp_capabilities")
+    for suffix in sorted(set().union(*(set(tables.get(key, {})) for key in lldp_keys))):
         parts = suffix.split(".")
         local_number = parts[-2] if len(parts) >= 3 else ""
+        chassis = tables.get("lldp_chassis_id", {}).get(suffix)
+        chassis_mac = _number(tables.get("lldp_chassis_subtype", {}).get(suffix)) == 4
+        chassis_id = _mac(chassis) if chassis_mac and chassis is not None else _text(chassis or "")
+        ips = management_ips.get(suffix, set())
         neighbors.append({
-            "neighbor_name": _text(name),
+            "neighbor_name": _text(tables.get("lldp_name", {}).get(suffix) or ""),
             "source_port": local_ports.get(local_number) or if_names.get(local_number),
             "remote_port": _text(tables.get("lldp_port", {}).get(suffix) or ""),
             "protocol": "LLDP",
+            "description": _text(tables.get("lldp_description", {}).get(suffix) or ""),
+            "chassis_id": chassis_id,
+            "capabilities": _lldp_capabilities(tables.get("lldp_capabilities", {}).get(suffix)),
+            "target_ip": sorted(ips)[0] if len(ips) == 1 else "",
         })
     for suffix, name in tables.get("cdp_name", {}).items():
         local_index = suffix.split(".")[0]
@@ -123,10 +181,7 @@ def build_inventory(tables):
             "remote_port": _text(tables.get("cdp_port", {}).get(suffix) or ""),
             "protocol": "CDP",
         })
-    serial = next((_text(value) for value in tables.get("ent_serial", {}).values()
-                   if _text(value).strip()), "")
-    model = next((_text(value) for value in tables.get("ent_model", {}).values()
-                  if _text(value).strip()), "")
+    model, serial = _hardware_identity(tables)
     return {"interfaces": interfaces, "vlans": vlans, "serial_number": serial,
             "model": model,
             "interface_vlans": membership, "mac_learnings": mac_learnings,
@@ -153,7 +208,8 @@ async def _collect(ip, credentials):
     context = ContextData()
     tables = {}
     with SnmpEngine() as engine:
-        scalar_oids = (OIDS["sys_descr"], OIDS["sys_name"], OIDS["sys_uptime"])
+        scalar_oids = (OIDS["sys_descr"], OIDS["sys_name"], OIDS["sys_uptime"],
+                       OIDS["sys_object_id"])
         error, status, _, bindings = await get_cmd(
             engine, auth, target, context,
             *(ObjectType(ObjectIdentity(oid)) for oid in scalar_oids), lookupMib=False,
@@ -163,6 +219,7 @@ async def _collect(ip, credentials):
         uptime_ticks = _number(bindings[2][1])
         result = {"has_snmp": True, "sys_descr": _text(bindings[0][1]),
                   "sys_name": _text(bindings[1][1]),
+                  "sys_object_id": _text(bindings[3][1]),
                   "uptime_seconds": uptime_ticks // 100 if uptime_ticks is not None else None}
         for key, oid in OIDS.items():
             if key.startswith("sys_"):

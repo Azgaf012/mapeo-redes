@@ -1,4 +1,11 @@
+import json
+
 from database.connection import get_db
+
+
+def _synthetic_model(model):
+    return model in {"Smartphone (MAC Privada)", "Aruba AP (modelo sin confirmar)"} or model.startswith("Switch (")
+
 
 class DeviceRepository:
     def __init__(self, db_path=None):
@@ -56,6 +63,63 @@ class DeviceRepository:
             row = cursor.fetchone()
             return dict(row) if row else None
 
+    def apply_observed_identity(self, device_id, device_type, neighbor):
+        """Preserve manual corrections and attach the LLDP evidence to an unknown device."""
+        with get_db(self.db_path) as conn:
+            device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if not device or device["is_manual"] or device["device_type"] != "UNKNOWN":
+                return False
+            try:
+                evidence = json.loads(device["scan_evidence"] or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                evidence = {}
+            evidence["detected_type"] = device_type
+            evidence["classification_source"] = "lldp" if neighbor.get("protocol", "LLDP") == "LLDP" else "cdp"
+            evidence["neighbor_identity"] = {
+                key: neighbor.get(key) for key in ("source_ip", "source_port", "neighbor_name",
+                                                  "description", "chassis_id", "target_ip", "capabilities")
+            }
+            previous_name = device["hostname"] or ""
+            hostname = (neighbor.get("neighbor_name") or "").strip()[:120]
+            if previous_name and previous_name not in {"Celular / Móvil", "Smartphone (MAC Privada)"}:
+                hostname = previous_name
+            previous_model = device["model"] or ""
+            model = "" if _synthetic_model(previous_model) else previous_model
+            conn.execute("""
+                UPDATE devices SET device_type=?, hostname=?, model=?, scan_evidence=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+            """, (device_type, hostname, model, json.dumps(evidence, ensure_ascii=False), device_id))
+            return True
+
+    def confirm_access_point(self, device_id, source):
+        """An explicit AP export can identify an unknown AP without changing manual entries."""
+        with get_db(self.db_path) as conn:
+            device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if not device or device["is_manual"] or device["device_type"] != "UNKNOWN":
+                return False
+            try:
+                evidence = json.loads(device["scan_evidence"] or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                evidence = {}
+            evidence.update({"detected_type": "ACCESS_POINT", "classification_source": source})
+            hostname = device["hostname"] or ""
+            if hostname == "Celular / Móvil":
+                hostname = ""
+            model = device["model"] or ""
+            if _synthetic_model(model):
+                model = ""
+            conn.execute("""
+                UPDATE devices SET device_type='ACCESS_POINT', hostname=?, model=?,
+                    scan_evidence=?, updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+            """, (hostname, model, json.dumps(evidence, ensure_ascii=False), device_id))
+            return True
+
     def upsert_discovered(self, site_id, data):
         """
         Inserts or updates a discovered device.
@@ -105,6 +169,15 @@ class DeviceRepository:
                     ))
                 else:
                     # Automatic update of all discovered fields
+                    unidentified = data.get("device_type") == "UNKNOWN"
+                    previous_hostname = existing["hostname"] or ""
+                    previous_model = existing["model"] or ""
+                    hostname = data.get("hostname") or (
+                        "" if unidentified and previous_hostname == "Celular / Móvil"
+                        else previous_hostname)
+                    model = data.get("model") or (
+                        "" if unidentified and _synthetic_model(previous_model)
+                        else previous_model)
                     cursor.execute("""
                         UPDATE devices
                         SET network_id = COALESCE(?, network_id),
@@ -127,9 +200,9 @@ class DeviceRepository:
                     """, (
                         data.get("network_id") or existing["network_id"],
                         data.get("mac") or existing["mac"],
-                        data.get("hostname") or existing["hostname"],
+                        hostname,
                         data.get("vendor") or existing["vendor"],
-                        data.get("model") or existing["model"],
+                        model,
                         data.get("serial_number") or existing["serial_number"],
                         data.get("device_type") or existing["device_type"],
                         data.get("latency_ms"),

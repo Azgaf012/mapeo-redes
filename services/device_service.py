@@ -1,12 +1,14 @@
 import csv
 import io
 import json
+from datetime import datetime, timedelta, timezone
 
 class DeviceService:
-    def __init__(self, device_repo, connection_repo, detail_repo=None):
+    def __init__(self, device_repo, connection_repo, detail_repo=None, ap_association_repo=None):
         self.device_repo = device_repo
         self.connection_repo = connection_repo
         self.detail_repo = detail_repo
+        self.ap_association_repo = ap_association_repo
 
     def list_devices(self, site_id=None, device_type=None, search=None, status=None):
         return self.device_repo.get_all(site_id=site_id, device_type=device_type, search=search, status=status)
@@ -67,6 +69,20 @@ class DeviceService:
     def export_csv(self, site_id=None):
         devices = self.device_repo.get_all(site_id=site_id)
         vlan_by_device = self.detail_repo.get_device_vlans(site_id) if self.detail_repo and site_id else {}
+        devices_by_id = {device["id"]: device for device in devices}
+        ap_by_mac = {}
+        if self.ap_association_repo and site_id:
+            cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+            for association in self.ap_association_repo.get_by_site(site_id):
+                try:
+                    observed = datetime.fromisoformat(association["observed_at"])
+                    if observed.tzinfo:
+                        observed = observed.astimezone(timezone.utc).replace(tzinfo=None)
+                except (TypeError, ValueError):
+                    continue
+                ap = devices_by_id.get(association["ap_device_id"])
+                if observed >= cutoff and ap and ap["device_type"] == "ACCESS_POINT":
+                    ap_by_mac[association["client_mac"]] = (ap, association["observed_at"])
         output = io.StringIO()
         writer = csv.writer(output, delimiter=",")
         
@@ -80,10 +96,15 @@ class DeviceService:
             "DNS inverso", "Nombre NetBIOS", "TTL ICMP", "Estado SNMP",
             "SNMP sysName", "SNMP sysDescr", "SNMP modelo",
             "Interfaces SNMP", "Vecinos SNMP", "Título web", "Puerto web",
-            "Advertencia SNMP", "Sondeos web (JSON)", "Modelo detectado"
+            "Advertencia SNMP", "Sondeos web (JSON)", "Modelo detectado",
+            "SNMP sysObjectID", "Vecinos LLDP (JSON)", "Identidad vecino (JSON)",
+            "AP asociado", "Fuente AP", "Importado AP"
         ])
         
         for d in devices:
+            normalized_mac = "".join(char for char in (d.get("mac") or "").upper()
+                                     if char in "0123456789ABCDEF")
+            ap_match = ap_by_mac.get(normalized_mac)
             try:
                 evidence = json.loads(d.get("scan_evidence") or "{}")
                 if not isinstance(evidence, dict):
@@ -137,6 +158,14 @@ class DeviceService:
                 json.dumps(evidence["web_probes"], ensure_ascii=False)
                 if "web_probes" in evidence else "",
                 evidence.get("detected_model", ""),
+                evidence.get("snmp_sys_object_id", ""),
+                json.dumps(evidence["snmp_neighbors"], ensure_ascii=False)
+                if "snmp_neighbors" in evidence else "",
+                json.dumps(evidence["neighbor_identity"], ensure_ascii=False)
+                if "neighbor_identity" in evidence else "",
+                (ap_match[0]["hostname"] or ap_match[0]["ip"]) if ap_match else "",
+                "CSV cliente-AP" if ap_match else "",
+                ap_match[1] if ap_match else "",
             ])
             
         output.seek(0)

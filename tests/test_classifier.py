@@ -146,7 +146,7 @@ def test_aruba_controller_redirect_identifies_ap_and_records_other_web_ports(mon
         "192.168.50.55", vendor="Hewlett Packard Enterprise",
         open_ports=[22, 80, 443, 8080], diagnostics=diagnostics)
     assert result[0] == "ACCESS_POINT"
-    assert result[2] == "Aruba Instant AP"
+    assert result[2] == "Aruba AP (modelo sin confirmar)"
     assert requested_ports == [443, 80, 8080]
     assert diagnostics["web_probes"][0] == {
         "port": 443, "status": 302, "content_type": "text/html",

@@ -5,8 +5,13 @@ def _normalized(value):
     return (value or "").strip().lower().split(".")[0]
 
 
+def _mac(value):
+    return "".join(char for char in (value or "").upper() if char in "0123456789ABCDEF")
+
+
 def resolve_neighbor(neighbor, devices):
     identifiers = [neighbor.get("target_ip"), neighbor.get("neighbor_name")]
+    chassis_mac = _mac(neighbor.get("chassis_id"))
     matches = []
     for device in devices:
         names = {device.get("ip", "").lower(), _normalized(device.get("hostname"))}
@@ -14,6 +19,9 @@ def resolve_neighbor(neighbor, devices):
             if identifier and (_normalized(identifier) in names or identifier.lower() in names):
                 matches.append(device)
                 break
+        else:
+            if len(chassis_mac) == 12 and chassis_mac == _mac(device.get("mac")):
+                matches.append(device)
     return matches[0] if len(matches) == 1 else None
 
 

@@ -50,3 +50,4 @@ htmlcov/
 .idea/
 *.swp
 *.swo
+.tools/

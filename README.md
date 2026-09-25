@@ -41,6 +41,21 @@ La exportación CSV conserva sus columnas anteriores y añade señales para revi
 
 El mapa físico representa solo relaciones respaldadas por LLDP/CDP o registradas manualmente. Las tablas MAC ayudan a investigar puertos, pero por sí solas no prueban un cable directo. Algunos equipos y redes aisladas pueden no ser visibles desde la computadora de escaneo.
 
+## Asociaciones cliente–AP desde CSV
+
+En **Mapa de red**, usa **Descargar plantilla** e **Importar asociaciones**. El CSV debe tener una fila por cliente, con `client_mac,ap_ip`. Admite coma o punto y coma como separador y UTF-8. También se aceptan los encabezados `MAC address,Access Point` y `macaddr,associated_device`. La referencia del AP puede ser su IP, nombre o serial, siempre que identifique un solo dispositivo del inventario de la sede. Si el AP aún figuraba como desconocido, una referencia válida lo identifica como punto de acceso sin asignarle un modelo supuesto.
+
+```csv
+client_mac,ap_ip
+AA:BB:CC:DD:EE:01,192.168.50.55
+```
+
+La importación reemplaza la captura anterior de esa sede. Informa cuántas filas se importaron, cuántas no encontraron AP, cuántas son inválidas y cuántas MAC aparecen asociadas a AP distintos. Si ninguna fila es válida, conserva la captura anterior. Un archivo que solo contiene los encabezados borra la captura. El mapa muestra estas asociaciones durante 24 horas desde la importación y da prioridad a esta fuente sobre una MAC aprendida en una interfaz de radio. No crea enlaces físicos. El CSV de inventario exporta el AP asociado, la fuente y la fecha, además de `sysObjectID` y los detalles LLDP disponibles.
+
+En switches y otros equipos que respondan SNMP, la lectura ahora prioriza el modelo y serial del chasis; también recoge la descripción, capacidad, identificador y dirección de administración que anuncien los vecinos LLDP. Una identidad LLDP que coincide de forma única con un equipo existente puede clasificarlo, pero no se crean dispositivos a partir de anuncios no resueltos. El puerto Aruba 4343 no confirma por sí solo si la administración usa Instant o ArubaOS 8.
+
+Referencias: [Aruba Instant REST](https://www.arubanetworks.com/techdocs/Aruba-Instant-8.x-Books/8111/Aruba-Instant-8.11.1.0-REST-API-Guide.pdf), [ArubaOS 8 REST](https://developer.arubanetworks.com/aos8/docs/getting-started-aos8-restapi), [Aruba 2530 LLDP](https://www.arubanetworks.com/techdocs/AOS-Switch/16.10/Aruba%202530%20Management%20and%20Configuration%20Guide%20for%20ArubaOS-Switch%2016.10.pdf), [SNMP sysObjectID](https://datatracker.ietf.org/doc/html/rfc3418) y [ENTITY-MIB](https://datatracker.ietf.org/doc/rfc4133/).
+
 ## Pruebas
 
 ```powershell

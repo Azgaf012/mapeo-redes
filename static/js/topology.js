@@ -111,7 +111,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 addDetail("Alcance de la asociación", data.switch_association.evidence);
             }
             if (data.ap_association) {
-                addDetail("AP asociado por MAC", data.ap_association.ap_name);
+                addDetail("AP asociado", data.ap_association.ap_name);
+                addDetail("Fuente", data.ap_association.source === "ap_client_csv"
+                    ? "CSV de asociaciones cliente-AP" : "MAC observada en radio del AP");
+                addDetail(data.ap_association.source === "ap_client_csv" ? "Importado" : "Observado",
+                    data.ap_association.observed_at);
                 addDetail("Radio del AP", data.ap_association.radio);
                 addDetail("Alcance de la asociación", data.ap_association.evidence);
             }
@@ -366,6 +370,29 @@ document.addEventListener("DOMContentLoaded", () => {
         link.href = graph.png({ full: true, bg: "#ffffff", scale: 2 });
         link.download = `mapa-${view}.png`;
         link.click();
+    });
+    document.getElementById("ap-association-upload").addEventListener("submit", async event => {
+        event.preventDefault();
+        const form = event.currentTarget;
+        const message = document.getElementById("ap-association-status");
+        const button = form.querySelector('button[type="submit"]');
+        button.disabled = true;
+        message.textContent = "Importando asociaciones...";
+        try {
+            const response = await fetch("/api/ap-associations/import", {
+                method: "POST", body: new FormData(form)
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudo importar el CSV.");
+            message.textContent = result.replaced
+                ? `${result.imported} asociaciones importadas · ${result.unresolved} AP sin coincidencia · ${result.invalid} filas inválidas · ${result.ambiguous} MAC ambiguas.`
+                : `No se importaron asociaciones; se conservó la captura anterior. ${result.unresolved} AP sin coincidencia · ${result.invalid} filas inválidas · ${result.ambiguous} MAC ambiguas.`;
+            if (result.replaced) await load();
+        } catch (error) {
+            message.textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
     });
     load();
 });

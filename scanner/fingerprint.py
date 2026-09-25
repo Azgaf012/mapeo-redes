@@ -183,13 +183,13 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
             if web_evidence and not first_web_title:
                 first_web_title = web_evidence
 
-            # Aruba Instant AP members redirect to the virtual controller on 4343.
+            # Aruba APs may redirect to management on 4343; the port does not identify the platform.
             if (probe.get("status") in (301, 302, 303, 307, 308)
                     and probe.get("redirect_port") == 4343
                     and "arubanetworks.com" in html.lower()):
                 probe["aruba_marker"] = True
                 if not classification:
-                    classification = {"device_type": "ACCESS_POINT", "model": "Aruba Instant AP",
+                    classification = {"device_type": "ACCESS_POINT", "model": "Aruba AP (modelo sin confirmar)",
                                       **web_evidence}
 
             t_low = title.lower()

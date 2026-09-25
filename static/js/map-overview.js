@@ -95,7 +95,7 @@
             }
             const id = `map-group:${group.id}`;
             visible.push({ group: 'nodes', data: { id, kind: 'map_group',
-                label: `${group.parentId ? 'Equipos de' : 'Sin enlace confirmado'}\n${group.title}\n${group.count} equipos${group.associatedCount ? ` · ${group.associatedCount} por MAC` : ''}`,
+                label: `${group.parentId ? 'Equipos de' : 'Sin enlace confirmado'}\n${group.title}\n${group.count} equipos${group.associatedCount ? ` · ${group.associatedCount} asociados` : ''}`,
                 name: group.title, count: group.count, group_id: group.id,
                 parent_id: group.parentId, parent_type: group.parentType,
                 associated_count: group.associatedCount } });

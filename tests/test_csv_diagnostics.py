@@ -22,9 +22,11 @@ def test_scan_evidence_is_exported_and_manual_type_is_distinct(tmp_path, monkeyp
         "has_snmp": True,
         "sys_name": "AP-AULA",
         "sys_descr": "Aruba Instant AP-505",
+        "sys_object_id": "1.3.6.1.4.1.14823.1.2.3",
         "model": "AP-505",
         "interfaces": [{"name": "eth0"}],
-        "neighbors": [],
+        "neighbors": [{"neighbor_name": "SW-ACCESS", "source_port": "eth0",
+                       "description": "HP 2530 Switch", "target_ip": "192.168.48.82"}],
     })
     monkeypatch.setattr("services.discovery_service.socket.gethostbyaddr",
                         lambda ip: ("ap-aula.local", [], [ip]))
@@ -58,11 +60,37 @@ def test_scan_evidence_is_exported_and_manual_type_is_distinct(tmp_path, monkeyp
     assert row["TTL ICMP"] == "64"
     assert row["Estado SNMP"] == "available"
     assert row["SNMP sysDescr"] == "Aruba Instant AP-505"
+    assert row["SNMP sysObjectID"] == "1.3.6.1.4.1.14823.1.2.3"
+    assert json.loads(row["Vecinos LLDP (JSON)"])[0]["target_ip"] == "192.168.48.82"
     assert row["Interfaces SNMP"] == "1"
     assert row["Título web"] == "Aruba AP-505"
     assert row["Puerto web"] == "443"
     assert json.loads(row["Sondeos web (JSON)"])[0]["redirect_port"] == 4343
     assert row["Modelo detectado"] == "AP-505"
+
+
+def test_csv_includes_recent_ap_association(tmp_path):
+    from repositories.ap_association_repository import ApAssociationRepository
+    from services.ap_association_service import ApAssociationService
+
+    db_path = str(tmp_path / "ap-export.db")
+    init_db(db_path)
+    site_id = SiteRepository(db_path).get_all()[0]["id"]
+    devices = DeviceRepository(db_path)
+    devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.55", "hostname": "AP-AULA", "device_type": "ACCESS_POINT"})
+    devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.60", "mac": "AA:BB:CC:DD:EE:01"})
+    associations = ApAssociationRepository(db_path)
+    ApAssociationService(devices, associations).import_csv(
+        site_id, b"client_mac,ap_ip\nAA:BB:CC:DD:EE:01,192.168.50.55\n")
+
+    rows = list(csv.DictReader(io.StringIO(DeviceService(
+        devices, None, ap_association_repo=associations).export_csv(site_id))))
+    client = next(row for row in rows if row["IP"] == "192.168.50.60")
+    assert client["AP asociado"] == "AP-AULA"
+    assert client["Fuente AP"] == "CSV cliente-AP"
+    assert client["Importado AP"]
 
 
 def test_legacy_devices_export_empty_evidence_columns(tmp_path):

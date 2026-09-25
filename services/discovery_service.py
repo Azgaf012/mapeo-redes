@@ -8,8 +8,10 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import Config
 from repositories.network_detail_repository import NetworkDetailRepository
+from repositories.ap_association_repository import ApAssociationRepository
+from services.ap_association_service import ApAssociationService
 from scanner.arp import get_arp_table
-from scanner.classifier import classify_device
+from scanner.classifier import classify_device, classify_lldp_neighbor
 from scanner.enricher import (detect_os_info, evaluate_security_status,
                               format_open_ports_summary, query_netbios_details)
 from scanner.fingerprint import fingerprint_device
@@ -17,6 +19,7 @@ from scanner.network import detect_network_config
 from scanner.nmap_scanner import scan_host_services
 from scanner.ping import ping_sweep
 from scanner.snmp_inventory import collect_snmp_inventory
+from scanner.topology import resolve_neighbor
 from scanner.vendor import lookup_vendor
 
 
@@ -40,6 +43,8 @@ class DiscoveryService:
         self.scan_job_repo = scan_job_repo
         self.site_repo = site_repo
         self.detail_repo = detail_repo or NetworkDetailRepository(device_repo.db_path)
+        self.ap_association_service = (ApAssociationService(
+            device_repo, ApAssociationRepository(device_repo.db_path)) if device_repo else None)
         self.max_hosts = max_hosts or Config.MAX_SCAN_HOSTS
         self.host_workers = host_workers or Config.SCAN_HOST_WORKERS
 
@@ -119,9 +124,11 @@ class DiscoveryService:
             "snmp_status": "error" if warning else ("available" if snmp.get("has_snmp") else "no_response"),
             "snmp_sys_name": snmp.get("sys_name") or "",
             "snmp_sys_descr": (snmp.get("sys_descr") or "")[:500],
+            "snmp_sys_object_id": snmp.get("sys_object_id") or "",
             "snmp_model": snmp.get("model") or "",
             "snmp_interface_count": len(snmp.get("interfaces") or []),
             "snmp_neighbor_count": len(snmp.get("neighbors") or []),
+            "snmp_neighbors": (snmp.get("neighbors") or [])[:256],
             "snmp_warning": warning or "",
             **web_evidence,
         }
@@ -139,6 +146,23 @@ class DiscoveryService:
         }
         neighbors = [dict(neighbor, source_ip=ip) for neighbor in snmp.get("neighbors", [])]
         return payload, snmp, neighbors, warning
+
+    def _enrich_neighbor_identities(self, site_id, neighbors, devices):
+        """Upgrade unknown devices only when an LLDP/CDP neighbor resolves uniquely."""
+        candidates = {}
+        for neighbor in neighbors:
+            target = resolve_neighbor(neighbor, devices)
+            if not target or target["ip"] == neighbor.get("source_ip"):
+                continue
+            device_type = classify_lldp_neighbor(neighbor)
+            if device_type == "UNKNOWN":
+                continue
+            candidates.setdefault(target["id"], []).append((device_type, neighbor))
+        for device_id, observations in candidates.items():
+            if len({device_type for device_type, _ in observations}) != 1:
+                continue
+            device_type, neighbor = observations[0]
+            self.device_repo.apply_observed_identity(device_id, device_type, neighbor)
 
     def _run_scan_pipeline(self, job_id, site_id, cidr, gateway, local_ip,
                            local_mac, credentials):
@@ -190,6 +214,10 @@ class DiscoveryService:
                             len(ips))
 
             self.scan_job_repo.update_progress(job_id, 90, "Resolviendo vecinos y puertos...")
+            self.ap_association_service.refresh_recent_aps(site_id)
+            devices = self.device_repo.get_all(site_id=site_id)
+            active_devices = [device for device in devices if device["status"] == "ONLINE"]
+            self._enrich_neighbor_identities(site_id, neighbors, active_devices)
             devices = self.device_repo.get_all(site_id=site_id)
             by_ip = {device["ip"]: device for device in devices}
             active_devices = [device for device in devices if device["status"] == "ONLINE"]

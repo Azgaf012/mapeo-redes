@@ -152,6 +152,17 @@ CREATE TABLE IF NOT EXISTS neighbor_observations (
     observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
+CREATE TABLE IF NOT EXISTS ap_client_associations (
+    site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    client_mac TEXT NOT NULL,
+    ap_device_id INTEGER NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    observed_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (site_id, client_mac)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ap_client_associations_ap
+ON ap_client_associations(ap_device_id);
+
 -- Indices para acelerar consultas frecuentes
 CREATE INDEX IF NOT EXISTS idx_devices_site_id ON devices(site_id);
 CREATE INDEX IF NOT EXISTS idx_devices_ip ON devices(ip);

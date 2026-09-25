@@ -8,9 +8,11 @@ from repositories.device_repository import DeviceRepository
 from repositories.connection_repository import ConnectionRepository
 from repositories.scan_job_repository import ScanJobRepository
 from repositories.network_detail_repository import NetworkDetailRepository
+from repositories.ap_association_repository import ApAssociationRepository
 from services.discovery_service import DiscoveryService, scan_size
 from services.topology_service import TopologyService
 from services.device_service import DeviceService
+from services.ap_association_service import ApAssociationService
 from services.site_service import SiteService
 from scanner.network import detect_network_config
 
@@ -28,6 +30,7 @@ def create_app(config_class=Config):
     connection_repo = ConnectionRepository(app.config["DATABASE_PATH"])
     scan_job_repo = ScanJobRepository(app.config["DATABASE_PATH"])
     detail_repo = NetworkDetailRepository(app.config["DATABASE_PATH"])
+    ap_association_repo = ApAssociationRepository(app.config["DATABASE_PATH"])
 
     # Instantiate services
     discovery_service = DiscoveryService(
@@ -45,17 +48,20 @@ def create_app(config_class=Config):
         connection_repo=connection_repo,
         site_repo=site_repo,
         network_repo=network_repo,
-        detail_repo=detail_repo
+        detail_repo=detail_repo,
+        ap_association_repo=ap_association_repo
     )
     device_service = DeviceService(
         device_repo=device_repo,
         connection_repo=connection_repo,
-        detail_repo=detail_repo
+        detail_repo=detail_repo,
+        ap_association_repo=ap_association_repo
     )
     site_service = SiteService(
         site_repo=site_repo,
         device_repo=device_repo
     )
+    ap_association_service = ApAssociationService(device_repo, ap_association_repo)
 
     # Context processor to inject sites into all templates
     @app.context_processor
@@ -310,6 +316,19 @@ def create_app(config_class=Config):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify(data)
+
+    @app.route("/api/ap-associations/import", methods=["POST"])
+    def api_import_ap_associations():
+        site_id = active_site_id()
+        uploaded = request.files.get("file")
+        if not site_id or not uploaded:
+            return jsonify({"error": "Selecciona un CSV para esta sede."}), 400
+        content = uploaded.stream.read(2_000_001)
+        try:
+            result = ap_association_service.import_csv(site_id, content)
+        except ValueError as exc:
+            return jsonify({"error": str(exc)}), 400
+        return jsonify(result)
 
     @app.route("/api/sites/<int:site_id>/clear-devices", methods=["POST"])
     def api_clear_site_devices(site_id):

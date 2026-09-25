@@ -15,7 +15,7 @@ from repositories.network_detail_repository import NetworkDetailRepository
 from repositories.site_repository import SiteRepository
 from repositories.scan_job_repository import ScanJobRepository
 from scanner.ping import ping_sweep
-from scanner.topology import build_topology
+from scanner.topology import build_topology, resolve_neighbor
 from scanner.snmp_inventory import build_inventory
 from services.discovery_service import DiscoveryService, scan_size
 from services.topology_service import TopologyService
@@ -176,6 +176,76 @@ def test_snmp_tables_include_ports_vlans_and_neighbors():
     assert inventory["interface_vlans"] == [{"if_index": 12, "vlan": 20, "mode": "UNTAGGED"}]
     assert inventory["mac_learnings"][0]["if_index"] == 12
     assert inventory["neighbors"][0]["source_port"] == "Gi0/12"
+
+
+def test_snmp_inventory_uses_chassis_model_and_lldp_management_address():
+    class Octets:
+        def __init__(self, value):
+            self.value = value
+
+        def asOctets(self):
+            return self.value
+
+    tables = {
+        "ent_class": {"1": "10", "2": "3"},
+        "ent_model": {"1": "Ethernet port", "2": "J9772A"},
+        "ent_serial": {"1": "PORT-1", "2": "CHASSIS-1"},
+        "lldp_local_port": {"12": "Gi0/12"},
+        "lldp_name": {"0.12.1": "AP-AULA"},
+        "lldp_port": {"0.12.1": "eth0"},
+        "lldp_description": {"0.12.1": "Aruba Instant AP-505"},
+        "lldp_chassis_subtype": {"0.12.1": "4"},
+        "lldp_chassis_id": {"0.12.1": Octets(bytes.fromhex("24f27fcfa856"))},
+        "lldp_capabilities": {"0.12.1": Octets(b"\x10")},
+        "lldp_management_if": {"0.12.1.1.4.192.168.50.55": "2"},
+    }
+
+    inventory = build_inventory(tables)
+    assert inventory["model"] == "J9772A"
+    assert inventory["serial_number"] == "CHASSIS-1"
+    assert inventory["neighbors"] == [{
+        "neighbor_name": "AP-AULA", "source_port": "Gi0/12",
+        "remote_port": "eth0", "protocol": "LLDP",
+        "description": "Aruba Instant AP-505",
+        "chassis_id": "24:F2:7F:CF:A8:56",
+        "capabilities": ["wlan_access_point"],
+        "target_ip": "192.168.50.55",
+    }]
+
+
+def test_lldp_identity_finds_existing_ap_and_respects_manual_override(mapping_db):
+    site_id = SiteRepository(mapping_db).get_all()[0]["id"]
+    devices = DeviceRepository(mapping_db)
+    devices.upsert_discovered(site_id, {
+        "ip": "192.168.48.82", "device_type": "SWITCH", "hostname": "SW-ACCESS"})
+    ap_id = devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.55", "mac": "24:F2:7F:CF:A8:56",
+        "device_type": "UNKNOWN", "scan_evidence": '{"detected_type":"UNKNOWN"}'})
+    neighbor = {
+        "source_ip": "192.168.48.82", "neighbor_name": "AP-AULA",
+        "description": "Aruba Instant AP-505", "chassis_id": "24f27fcfa856",
+        "capabilities": ["wlan_access_point"], "source_port": "Gi0/12",
+    }
+    assert resolve_neighbor(neighbor, devices.get_all(site_id=site_id))["id"] == ap_id
+
+    other_id = devices.upsert_discovered(site_id, {
+        "ip": "192.168.50.56", "device_type": "UNKNOWN"})
+    assert other_id != ap_id
+    conflicting = dict(neighbor, target_ip="192.168.50.56")
+    assert resolve_neighbor(conflicting, devices.get_all(site_id=site_id)) is None
+
+    service = DiscoveryService(devices, None, None, None, None)
+    service._enrich_neighbor_identities(site_id, [neighbor], devices.get_all(site_id=site_id))
+    ap = devices.get_by_id(ap_id)
+    assert ap["device_type"] == "ACCESS_POINT"
+    assert ap["hostname"] == "AP-AULA"
+    evidence = json.loads(ap["scan_evidence"])
+    assert evidence["classification_source"] == "lldp"
+    assert evidence["neighbor_identity"]["description"] == "Aruba Instant AP-505"
+
+    devices.update_manual_fields(ap_id, {"device_type": "PC"})
+    service._enrich_neighbor_identities(site_id, [neighbor], devices.get_all(site_id=site_id))
+    assert devices.get_by_id(ap_id)["device_type"] == "PC"
 
 
 def test_two_observed_ports_between_same_devices_are_retained(mapping_db):
