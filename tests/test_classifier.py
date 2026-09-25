@@ -85,11 +85,36 @@ def test_hpe_access_point_is_identified_from_https_title(monkeypatch):
 
     monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
     monkeypatch.setattr(fingerprint.urllib.request, "urlopen", fake_urlopen)
+    diagnostics = {}
     result = fingerprint.fingerprint_device(
         "192.168.50.55", mac="24:F2:7F:CF:A8:56",
-        vendor="Hewlett Packard Enterprise", open_ports=[443])
+        vendor="Hewlett Packard Enterprise", open_ports=[443],
+        diagnostics=diagnostics)
     assert result[0] == "ACCESS_POINT"
     assert "AP-505" in result[2]
+    assert diagnostics == {"web_title": "Aruba AP-505 Access Point", "web_port": 443}
+
+
+def test_unrecognized_web_title_is_available_for_later_review(monkeypatch):
+    from scanner import fingerprint
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            return b"<html><title>Device Management Console</title></html>"
+
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+    monkeypatch.setattr(fingerprint.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    diagnostics = {}
+    result = fingerprint.fingerprint_device("192.168.50.55", open_ports=[443],
+                                            diagnostics=diagnostics)
+    assert result[0] == "UNKNOWN"
+    assert diagnostics == {"web_title": "Device Management Console", "web_port": 443}
 
 
 def test_hpe_vendor_and_mac_alone_do_not_imply_ap(monkeypatch):

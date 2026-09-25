@@ -107,6 +107,7 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
             return {"device_type": "SMART_TV", "model": "Google Cast / Android TV"}
 
     # 4. Device web titles, including local self-signed HTTPS management pages.
+    first_web_title = {}
     for port in [443, 8443, 80, 8080]:
         if port in open_ports:
             try:
@@ -124,28 +125,31 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
                     m_title = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
                     if m_title:
                         title = m_title.group(1).strip()
+                        web_evidence = {"web_title": title[:200], "web_port": port}
+                        if not first_web_title:
+                            first_web_title = web_evidence
                         t_low = title.lower()
                         
                         # TV indicators
                         if any(w in t_low for w in ["tv", "webos", "bravia", "tizen", "roku", "chromecast"]):
-                            return {"device_type": "SMART_TV", "model": title[:60]}
+                            return {"device_type": "SMART_TV", "model": title[:60], **web_evidence}
                         if is_access_point_identity(snmp_info={"model": title}):
-                            return {"device_type": "ACCESS_POINT", "model": title[:60]}
+                            return {"device_type": "ACCESS_POINT", "model": title[:60], **web_evidence}
                         # Router indicators
                         if any(w in t_low for w in ["router", "wireless", "gateway", "tp-link", "mikrotik", "d-link", "netgear", "asus", "zte", "huawei"]):
-                            return {"device_type": "ROUTER", "model": title[:60]}
+                            return {"device_type": "ROUTER", "model": title[:60], **web_evidence}
                         # Printer indicators
                         if any(w in t_low for w in ["printer", "laserjet", "deskjet", "epson", "brother", "kyocera", "xerox", "canon"]):
-                            return {"device_type": "PRINTER", "model": title[:60]}
+                            return {"device_type": "PRINTER", "model": title[:60], **web_evidence}
                         # Camera indicators
                         if any(w in t_low for w in ["camera", "hikvision", "dahua", "nvr", "dvr", "ip camera", "web service"]):
-                            return {"device_type": "CAMERA", "model": title[:60]}
+                            return {"device_type": "CAMERA", "model": title[:60], **web_evidence}
             except Exception:
                 pass
 
-    return {}
+    return first_web_title
 
-def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gateway=False, is_local=False, snmp_info=None):
+def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gateway=False, is_local=False, snmp_info=None, diagnostics=None):
     """
     Executes deep fingerprinting combining HTTP banners, NetBIOS, TV ports, battery status, and heuristics.
     Returns: (device_type, updated_hostname, updated_model)
@@ -189,6 +193,8 @@ def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_g
 
     # 4. Probe TV-specific ports & HTTP Titles (Roku, Samsung, Google Cast, webOS, AirPlay)
     http_fp = grab_http_title_and_model(ip, ports)
+    if diagnostics is not None:
+        diagnostics.update({key: http_fp[key] for key in ("web_title", "web_port") if key in http_fp})
     if http_fp.get("device_type") == "SMART_TV":
         return "SMART_TV", http_fp.get("hostname") or h, http_fp.get("model") or "Smart TV / Streaming"
     elif http_fp.get("device_type"):

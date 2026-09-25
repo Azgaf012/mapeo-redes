@@ -37,6 +37,8 @@ El borde azul discontinuo identifica Wi-Fi y el borde verde identifica cable. Pa
 
 El resumen muestra las subredes registradas y los tipos de equipos inventariados. En **Inventario**, el menú **Columnas** permite elegir los datos visibles; la selección se conserva en el navegador. El inventario y el mapa muestran solo equipos conectados al abrirse, con un filtro para incluir los desconectados.
 
+La exportación CSV conserva sus columnas anteriores y añade señales para revisar la detección: puertos TCP, tipo detectado antes de una corrección manual, origen de la clasificación, nombres DNS/NetBIOS, TTL, respuesta e identidad SNMP, cantidad de interfaces y vecinos, título y puerto web, y advertencia SNMP. Los equipos registrados antes de esta versión tendrán esas señales vacías hasta su próximo escaneo. No se exportan credenciales SNMP.
+
 El mapa físico representa solo relaciones respaldadas por LLDP/CDP o registradas manualmente. Las tablas MAC ayudan a investigar puertos, pero por sí solas no prueban un cable directo. Algunos equipos y redes aisladas pueden no ser visibles desde la computadora de escaneo.
 
 ## Pruebas

@@ -1,6 +1,7 @@
 """Coordinate discovery and persist each observable fact."""
 
 import ipaddress
+import json
 import socket
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -74,8 +75,10 @@ class DiscoveryService:
                       ping_details, credentials, network_id):
         mac = arp_table.get(ip, "") or (local_mac if ip == local_ip else "")
         vendor = lookup_vendor(mac) if mac else "Desconocido"
+        dns_name = ""
         try:
-            hostname = socket.gethostbyaddr(ip)[0]
+            dns_name = socket.gethostbyaddr(ip)[0]
+            hostname = dns_name
         except (OSError, socket.herror):
             hostname = socket.gethostname() if ip == local_ip else ""
         nb_name, workgroup = query_netbios_details(ip)
@@ -90,16 +93,36 @@ class DiscoveryService:
         if snmp.get("sys_name") and not hostname:
             hostname = snmp["sys_name"]
         ping = ping_details.get(ip, {})
+        web_evidence = {}
         device_type, fp_host, fp_model = fingerprint_device(
             ip=ip, mac=mac, hostname=hostname, vendor=vendor, open_ports=open_ports,
             is_gateway=ip == gateway, is_local=ip == local_ip, snmp_info=snmp,
+            diagnostics=web_evidence,
         )
+        classification_source = "fingerprint" if device_type != "UNKNOWN" else "unidentified"
         if device_type == "UNKNOWN":
             device_type = classify_device(
                 ip=ip, mac=mac, hostname=hostname, vendor=vendor,
                 open_ports=open_ports, is_gateway=ip == gateway, snmp_info=snmp,
             )
+            if device_type != "UNKNOWN":
+                classification_source = "classifier"
         hostname = fp_host or hostname
+        evidence = {
+            "detected_type": device_type,
+            "classification_source": classification_source,
+            "dns_name": dns_name,
+            "netbios_name": nb_name or "",
+            "icmp_ttl": ping.get("ttl"),
+            "snmp_status": "error" if warning else ("available" if snmp.get("has_snmp") else "no_response"),
+            "snmp_sys_name": snmp.get("sys_name") or "",
+            "snmp_sys_descr": (snmp.get("sys_descr") or "")[:500],
+            "snmp_model": snmp.get("model") or "",
+            "snmp_interface_count": len(snmp.get("interfaces") or []),
+            "snmp_neighbor_count": len(snmp.get("neighbors") or []),
+            "snmp_warning": warning or "",
+            **web_evidence,
+        }
         payload = {
             "network_id": network_id, "ip": ip, "mac": mac, "hostname": hostname,
             "vendor": vendor, "model": snmp.get("model") or fp_model or (snmp.get("sys_descr") or "")[:80],
@@ -109,6 +132,7 @@ class DiscoveryService:
             "os_info": detect_os_info(ping.get("ttl", 0), open_ports, vendor,
                                       device_type, hostname),
             "open_ports_list": format_open_ports_summary(open_ports),
+            "scan_evidence": json.dumps(evidence, ensure_ascii=False),
             "workgroup": workgroup or "", "security_status": evaluate_security_status(open_ports),
         }
         neighbors = [dict(neighbor, source_ip=ip) for neighbor in snmp.get("neighbors", [])]

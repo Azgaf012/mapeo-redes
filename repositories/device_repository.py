@@ -84,6 +84,7 @@ class DeviceRepository:
                             latency_ms = COALESCE(?, latency_ms),
                             os_info = CASE WHEN os_info IS NULL OR os_info = '' THEN ? ELSE os_info END,
                             open_ports_list = COALESCE(?, open_ports_list),
+                            scan_evidence = COALESCE(?, scan_evidence),
                             workgroup = CASE WHEN workgroup IS NULL OR workgroup = '' THEN ? ELSE workgroup END,
                             security_status = COALESCE(?, security_status),
                             status = 'ONLINE',
@@ -97,6 +98,7 @@ class DeviceRepository:
                         data.get("latency_ms"),
                         data.get("os_info"),
                         data.get("open_ports_list"),
+                        data.get("scan_evidence"),
                         data.get("workgroup"),
                         data.get("security_status"),
                         device_id
@@ -115,6 +117,7 @@ class DeviceRepository:
                             latency_ms = COALESCE(?, latency_ms),
                             os_info = COALESCE(?, os_info),
                             open_ports_list = COALESCE(?, open_ports_list),
+                            scan_evidence = COALESCE(?, scan_evidence),
                             workgroup = COALESCE(?, workgroup),
                             security_status = COALESCE(?, security_status),
                             status = 'ONLINE',
@@ -132,6 +135,7 @@ class DeviceRepository:
                         data.get("latency_ms"),
                         data.get("os_info"),
                         data.get("open_ports_list"),
+                        data.get("scan_evidence"),
                         data.get("workgroup"),
                         data.get("security_status"),
                         device_id
@@ -145,10 +149,10 @@ class DeviceRepository:
                 cursor.execute("""
                     INSERT INTO devices (
                         site_id, network_id, ip, mac, hostname, vendor, model, 
-                        serial_number, device_type, latency_ms, os_info, open_ports_list,
+                        serial_number, device_type, latency_ms, os_info, open_ports_list, scan_evidence,
                         workgroup, security_status, location, rack, floor, status, 
                         description, is_manual, last_seen
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ONLINE', ?, 0, CURRENT_TIMESTAMP)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'ONLINE', ?, 0, CURRENT_TIMESTAMP)
                 """, (
                     site_id,
                     data.get("network_id"),
@@ -162,6 +166,7 @@ class DeviceRepository:
                     data.get("latency_ms", 0.0),
                     data.get("os_info", ""),
                     data.get("open_ports_list", ""),
+                    data.get("scan_evidence", ""),
                     data.get("workgroup", ""),
                     data.get("security_status", "SECURE"),
                     data.get("location", ""),

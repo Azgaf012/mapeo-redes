@@ -42,6 +42,7 @@ def init_db(db_path=None):
             ("uptime_seconds", "INTEGER"),
             ("os_info", "TEXT DEFAULT ''"),
             ("open_ports_list", "TEXT DEFAULT ''"),
+            ("scan_evidence", "TEXT DEFAULT ''"),
             ("workgroup", "TEXT DEFAULT ''"),
             ("security_status", "TEXT DEFAULT 'SECURE'")
         ]

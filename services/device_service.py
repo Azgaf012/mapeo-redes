@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 
 class DeviceService:
     def __init__(self, device_repo, connection_repo, detail_repo=None):
@@ -74,10 +75,27 @@ class DeviceService:
             "ID", "Sede", "Subred", "VLAN", "IP", "MAC", "Hostname", "Tipo", "Fabricante", 
             "Modelo", "Sistema Operativo", "Latencia (ms)", "Seguridad",
             "Grupo de Trabajo", "Serial", "Estado", "Ubicación", "Rack", "Piso", 
-            "Modo Manual", "Última Conexión", "Descripción"
+            "Modo Manual", "Última Conexión", "Descripción",
+            "Puertos TCP abiertos", "Tipo detectado", "Origen detección",
+            "DNS inverso", "Nombre NetBIOS", "TTL ICMP", "Estado SNMP",
+            "SNMP sysName", "SNMP sysDescr", "SNMP modelo",
+            "Interfaces SNMP", "Vecinos SNMP", "Título web", "Puerto web",
+            "Advertencia SNMP"
         ])
         
         for d in devices:
+            try:
+                evidence = json.loads(d.get("scan_evidence") or "{}")
+                if not isinstance(evidence, dict):
+                    evidence = {}
+            except (TypeError, ValueError):
+                evidence = {}
+            try:
+                ports = json.loads(d.get("open_ports_list") or "[]")
+                port_numbers = ";".join(str(item["port"]) for item in ports
+                                        if isinstance(item, dict) and "port" in item)
+            except (TypeError, ValueError):
+                port_numbers = ""
             writer.writerow([
                 d["id"],
                 d.get("site_name", ""),
@@ -100,7 +118,22 @@ class DeviceService:
                 d["floor"] or "",
                 "Sí" if d["is_manual"] else "No",
                 d["last_seen"] or "",
-                d["description"] or ""
+                d["description"] or "",
+                port_numbers,
+                evidence.get("detected_type", ""),
+                evidence.get("classification_source", ""),
+                evidence.get("dns_name", ""),
+                evidence.get("netbios_name", ""),
+                evidence.get("icmp_ttl", ""),
+                evidence.get("snmp_status", ""),
+                evidence.get("snmp_sys_name", ""),
+                evidence.get("snmp_sys_descr", ""),
+                evidence.get("snmp_model", ""),
+                evidence.get("snmp_interface_count", ""),
+                evidence.get("snmp_neighbor_count", ""),
+                evidence.get("web_title", ""),
+                evidence.get("web_port", ""),
+                evidence.get("snmp_warning", ""),
             ])
             
         output.seek(0)

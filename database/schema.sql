@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS devices (
     uptime_seconds INTEGER,
     os_info TEXT DEFAULT '',
     open_ports_list TEXT DEFAULT '',
+    scan_evidence TEXT DEFAULT '',
     workgroup TEXT DEFAULT '',
     security_status TEXT DEFAULT 'SECURE', -- 'SECURE', 'WARNING', 'CRITICAL'
     description TEXT,
