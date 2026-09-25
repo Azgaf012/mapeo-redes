@@ -1,0 +1,38 @@
+# NetMap Escolar
+
+Inventario y exploración de la red de una sede. Cada instalación usa su propia base SQLite (`network.db`); la interfaz muestra una sola sede. Las bases existentes conservan sus registros al iniciar la versión nueva. Si una base anterior contiene varias sedes, la interfaz muestra la primera y conserva las demás para una futura versión multisede.
+
+## Preparación
+
+Requiere Python 3.10 o posterior. Desde la carpeta del proyecto:
+
+```powershell
+python -m pip install -r requirements.txt
+python app.py
+```
+
+La aplicación abre en `http://localhost:5000`. Si Nmap está instalado, se usa para revisar puertos TCP; en caso contrario se usa el sondeo TCP integrado. Para obtener interfaces, VLAN, tabla MAC y vecinos LLDP/CDP se necesitan equipos administrables y credenciales SNMP con permiso de lectura. El formulario acepta SNMPv3 y SNMPv2c; las credenciales se usan en ese escaneo y no se guardan en SQLite.
+
+`MAX_SCAN_HOSTS` controla el máximo de direcciones por escaneo (predeterminado: 16384) y `SCAN_HOST_WORKERS` la concurrencia de inspección (predeterminado: 12). El rango se valida y su tamaño se muestra antes de iniciar. Los equipos que no respondan dentro del rango escaneado permanecen en inventario como `OFFLINE`; el filtro «Solo conectados» los oculta.
+
+## Cómo leer el mapa
+
+- **Física:** enlaces LLDP/CDP observados y enlaces manuales. Un equipo sin enlace confirmado sigue visible.
+- **Lógica:** subred, gateway configurado y equipos asociados; también muestra VLAN observadas por SNMP. Las líneas al gateway representan la salida configurada para la subred, no prueban un cable directo ni la ruta predeterminada de cada equipo.
+- **Inventario:** todos los equipos agrupados por tipo, con filtro de estado.
+
+Selecciona un nodo o enlace para ver su detalle y origen. Los vecinos no resueltos aparecen al lado del mapa. La ficha del equipo incluye interfaces, estados, velocidad, VLAN, enlaces y direcciones MAC aprendidas cuando el dispositivo expone esos datos.
+
+Los nodos muestran un icono según el tipo de equipo y la leyenda indica cuáles están presentes en la vista. Los equipos desconectados aparecen en gris al activar su filtro; la forma y el icono siguen indicando el tipo.
+
+El borde azul discontinuo identifica Wi-Fi y el borde verde identifica cable. Para el equipo donde corre la aplicación, el medio proviene del adaptador de red local. En otros equipos, «Cable observado» requiere un enlace LLDP/CDP; si no hay una señal fiable, el mapa indica «No identificado». El inspector explica la evidencia disponible.
+
+El resumen muestra las subredes registradas y los tipos de equipos inventariados. En **Inventario**, el menú **Columnas** permite elegir los datos visibles; la selección se conserva en el navegador. El inventario y el mapa muestran solo equipos conectados al abrirse, con un filtro para incluir los desconectados.
+
+El mapa físico representa solo relaciones respaldadas por LLDP/CDP o registradas manualmente. Las tablas MAC ayudan a investigar puertos, pero por sí solas no prueban un cable directo. Algunos equipos y redes aisladas pueden no ser visibles desde la computadora de escaneo.
+
+## Pruebas
+
+```powershell
+python -m pytest -q
+```

@@ -1,0 +1,211 @@
+{% extends "base.html" %}
+
+{% block title %}Inventario de Dispositivos - Mapeo de Red Escolar{% endblock %}
+
+{% block content %}
+<div class="row g-3">
+    <!-- Header -->
+    <div class="col-12 d-flex flex-wrap justify-content-between align-items-center gap-2">
+        <div>
+            <h3 class="fw-bold mb-1"><i class="bi bi-hdd-network text-primary"></i> Inventario de Dispositivos</h3>
+            <p class="text-muted mb-0">Equipos de esta instalación. Los desconectados permanecen guardados y pueden mostrarse cuando los necesites.</p>
+        </div>
+        <div class="d-flex align-items-center gap-2">
+            <a href="{{ url_for('export_devices', site_id=selected_site_id) }}" class="btn btn-outline-success">
+                <i class="bi bi-file-earmark-excel"></i> Exportar a CSV
+            </a>
+            <a href="{{ url_for('index', site_id=selected_site_id) }}" class="btn btn-primary">
+                <i class="bi bi-radar"></i> Escanear Red
+            </a>
+        </div>
+    </div>
+
+    <!-- Filter Bar -->
+    <div class="col-12">
+        <div class="card p-3 bg-white border shadow-sm">
+            <form method="GET" action="{{ url_for('devices') }}" class="row g-2 align-items-center">
+                <div class="col-md-3">
+                    <label class="form-label small fw-semibold text-muted mb-1">Subred:</label>
+                    <select name="cidr" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">Todas las subredes</option>
+                        {% for network in available_subnets %}
+                            <option value="{{ network.cidr }}" {% if subnet_filter == network.cidr %}selected{% endif %}>{{ network.cidr }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small fw-semibold text-muted mb-1">Tipo de Dispositivo:</label>
+                    <select name="type" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">Todos los tipos</option>
+                        <option value="ROUTER" {% if device_type == 'ROUTER' %}selected{% endif %}>Router</option>
+                        <option value="FIREWALL" {% if device_type == 'FIREWALL' %}selected{% endif %}>Firewall</option>
+                        <option value="SWITCH" {% if device_type == 'SWITCH' %}selected{% endif %}>Switch</option>
+                        <option value="ACCESS_POINT" {% if device_type == 'ACCESS_POINT' %}selected{% endif %}>Access Point</option>
+                        <option value="SERVER" {% if device_type == 'SERVER' %}selected{% endif %}>Servidor</option>
+                        <option value="SMART_TV" {% if device_type == 'SMART_TV' %}selected{% endif %}>Smart TV / Media</option>
+                        <option value="PHONE" {% if device_type == 'PHONE' %}selected{% endif %}>Teléfono / Celular</option>
+                        <option value="LAPTOP" {% if device_type == 'LAPTOP' %}selected{% endif %}>Laptop</option>
+                        <option value="PC" {% if device_type == 'PC' %}selected{% endif %}>PC / Computadora</option>
+                        <option value="PRINTER" {% if device_type == 'PRINTER' %}selected{% endif %}>Impresora</option>
+                        <option value="CAMERA" {% if device_type == 'CAMERA' %}selected{% endif %}>Cámara IP</option>
+                        <option value="UNKNOWN" {% if device_type == 'UNKNOWN' %}selected{% endif %}>Desconocido</option>
+                    </select>
+                </div>
+                <div class="col-md-4">
+                    <label class="form-label small fw-semibold text-muted mb-1">Búsqueda rápida:</label>
+                    <div class="input-group input-group-sm">
+                        <input type="text" name="q" class="form-control" placeholder="Buscar por IP, MAC, hostname, fabricante..." value="{{ search or '' }}">
+                        <button class="btn btn-outline-secondary" type="submit"><i class="bi bi-search"></i></button>
+                    </div>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small fw-semibold text-muted mb-1">VLAN:</label>
+                    <select name="vlan" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="">Todas las VLAN</option>
+                        {% for vlan in available_vlans %}
+                            <option value="{{ vlan.vlan_id }}" {% if vlan_filter == vlan.vlan_id %}selected{% endif %}>{{ vlan.vlan_id }} · {{ vlan.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small fw-semibold text-muted mb-1">Estado:</label>
+                    <select name="status" class="form-select form-select-sm" onchange="this.form.submit()">
+                        <option value="ONLINE" {% if status_filter == 'ONLINE' %}selected{% endif %}>Solo conectados</option>
+                        <option value="ALL" {% if status_filter == 'ALL' %}selected{% endif %}>Incluir desconectados</option>
+                    </select>
+                </div>
+                <div class="col-md-2 d-flex align-items-end pt-3">
+                    <a href="{{ url_for('devices') }}" class="btn btn-sm btn-link text-muted">Limpiar filtros</a>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Inventory Table -->
+    <div class="col-12">
+        <div class="card stat-card">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <span class="fw-bold"><i class="bi bi-list-check text-primary"></i> Listado Técnico de Equipos ({{ devices|length }})</span>
+                <div class="d-flex align-items-center gap-2">
+                    <span class="badge bg-light text-muted border font-monospace">Sede local</span>
+                    <div class="dropdown">
+                        <button class="btn btn-sm btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" data-bs-auto-close="outside" aria-expanded="false">Columnas</button>
+                        <div class="dropdown-menu dropdown-menu-end p-3" style="min-width: 210px;">
+                            {% for key, label in [('type', 'Tipo'), ('vendor', 'Fabricante y modelo'), ('os', 'Sistema operativo'), ('latency', 'Latencia'), ('seen', 'Última vez visto'), ('location', 'Ubicación / rack')] %}
+                                <label class="dropdown-item px-0"><input class="form-check-input me-2 inventory-column-toggle" type="checkbox" value="{{ key }}" checked> {{ label }}</label>
+                            {% endfor %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="table-responsive">
+                <table id="inventory-table" class="table table-hover align-middle mb-0">
+                    <thead>
+                        <tr>
+                            <th>Dispositivo</th>
+                            <th>Dirección IP</th>
+                            <th data-column="type">Tipo</th>
+                            <th data-column="vendor">Fabricante y Modelo</th>
+                            <th data-column="os">Sistema Operativo</th>
+                            <th data-column="latency">Latencia</th>
+                            <th data-column="seen">Última vez visto</th>
+                            <th data-column="location">Ubicación / Rack</th>
+                            <th class="text-end">Acción</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% if devices %}
+                            {% for d in devices %}
+                                <tr>
+                                    <td>
+                                        <div class="d-flex align-items-center gap-2">
+                                            <span class="status-pill status-{{ d.status|lower }}"></span>
+                                            <div>
+                                                <strong class="d-block text-dark">{{ d.hostname or d.ip }}</strong>
+                                                <small class="font-monospace text-muted">{{ d.mac or 'MAC no detectada' }} · {{ 'Conectado' if d.status == 'ONLINE' else 'Desconectado' }}</small>
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <code class="text-dark fw-bold">{{ d.ip }}</code>
+                                        {% if d.is_manual %}
+                                            <span class="badge bg-light text-primary border small ms-1" title="Editado manualmente">
+                                                <i class="bi bi-pencil-fill"></i>
+                                            </span>
+                                        {% endif %}
+                                    </td>
+                                    <td data-column="type"><span class="badge badge-type badge-{{ d.device_type }}">{{ d.device_type }}</span></td>
+                                    <td data-column="vendor">
+                                        <div class="fw-semibold text-dark">{{ d.vendor or 'Desconocido' }}</div>
+                                        <small class="text-muted text-truncate d-inline-block" style="max-width: 170px;">{{ d.model or '-' }}</small>
+                                    </td>
+                                    <td data-column="os">
+                                        <small class="fw-semibold text-secondary">
+                                            {{ d.os_info or 'No determinado' }}
+                                        </small>
+                                    </td>
+                                    <td data-column="latency">
+                                        {% if d.status == 'ONLINE' and d.latency_ms is not none %}
+                                            {% set lat = d.latency_ms %}
+                                            <span class="latency-chip {% if lat < 15 %}latency-fast{% elif lat < 50 %}latency-med{% else %}latency-slow{% endif %}">
+                                                <i class="bi bi-activity"></i> {{ "%.1f"|format(lat) }} ms
+                                            </span>
+                                        {% else %}<small class="text-muted">Sin medición actual</small>{% endif %}
+                                    </td>
+                                    <td data-column="seen"><small class="text-muted">{{ d.last_seen or 'Sin dato' }}</small></td>
+                                    <td data-column="location">
+                                        <small>
+                                            {% if d.location %}{{ d.location }}{% endif %}
+                                            {% if d.rack %} [Rack {{ d.rack }}]{% endif %}
+                                            {% if d.floor %} (Piso {{ d.floor }}){% endif %}
+                                            {% if not d.location and not d.rack and not d.floor %}<span class="text-muted">-</span>{% endif %}
+                                        </small>
+                                    </td>
+                                    <td class="text-end">
+                                        <a href="{{ url_for('device_detail', device_id=d.id) }}" class="btn btn-sm btn-outline-primary" title="Ver ficha técnica completa">
+                                            <i class="bi bi-eye"></i> Ficha
+                                        </a>
+                                    </td>
+                                </tr>
+                            {% endfor %}
+                        {% else %}
+                            <tr>
+                                <td colspan="9" class="text-center py-5 text-muted">
+                                    <i class="bi bi-search display-6 d-block mb-3"></i>
+                                    <h5>No se encontraron dispositivos registrados</h5>
+                                    <p class="small mb-3">Ejecute un escaneo de red en la sede seleccionada para descubrir equipos automáticamente.</p>
+                                    <a href="{{ url_for('index', site_id=selected_site_id) }}" class="btn btn-sm btn-primary">
+                                        <i class="bi bi-radar"></i> Ir a Escanear
+                                    </a>
+                                </td>
+                            </tr>
+                        {% endif %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+<script>
+document.addEventListener("DOMContentLoaded", () => {
+    const toggles = Array.from(document.querySelectorAll(".inventory-column-toggle"));
+    let saved = null;
+    try { saved = JSON.parse(localStorage.getItem("netmap-inventory-columns")); } catch (_) {}
+    const apply = () => {
+        for (const toggle of toggles) {
+            for (const cell of document.querySelectorAll(`#inventory-table [data-column="${toggle.value}"]`)) {
+                cell.style.display = toggle.checked ? "" : "none";
+            }
+        }
+    };
+    if (Array.isArray(saved)) {
+        for (const toggle of toggles) toggle.checked = saved.includes(toggle.value);
+    }
+    apply();
+    for (const toggle of toggles) toggle.addEventListener("change", () => {
+        apply();
+        try { localStorage.setItem("netmap-inventory-columns", JSON.stringify(toggles.filter(item => item.checked).map(item => item.value))); } catch (_) {}
+    });
+});
+</script>
+{% endblock %}

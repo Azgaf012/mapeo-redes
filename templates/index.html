@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %}Resumen de red{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <p class="text-uppercase text-muted small fw-bold mb-1">Inventario de la sede local</p>
+        <h2 class="fw-bold mb-1">Estado de la red</h2>
+        <p class="text-muted mb-0">Descubre equipos, revisa hallazgos y abre el mapa según la pregunta que quieras resolver.</p>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('topology') }}" class="btn btn-primary">Explorar mapa</a>
+        <a href="{{ url_for('devices') }}" class="btn btn-outline-primary">Ver inventario</a>
+    </div>
+</div>
+
+<div class="row g-3 mb-4">
+    <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <p class="text-muted small mb-1">Equipos conectados</p><div class="display-6 fw-bold">{{ online_count }}</div>
+        <a href="{{ url_for('devices') }}" class="small">Revisar equipos</a>
+    </div></div></div>
+    <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <p class="text-muted small mb-1">Desconectados</p><div class="display-6 fw-bold">{{ offline_count }}</div>
+        <a href="{{ url_for('devices', status='ALL') }}" class="small">Mostrar también desconectados</a>
+    </div></div></div>
+    <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <p class="text-muted small mb-1">Enlaces observados</p><div class="display-6 fw-bold">{{ link_count }}</div>
+        <a href="{{ url_for('topology') }}" class="small">Abrir mapa físico</a>
+    </div></div></div>
+    <div class="col-sm-6 col-xl-3"><div class="card border-0 shadow-sm h-100"><div class="card-body">
+        <p class="text-muted small mb-1">Vecinos por resolver</p><div class="display-6 fw-bold">{{ unresolved_count }}</div>
+        <a href="{{ url_for('topology') }}" class="small">Revisar hallazgos</a>
+    </div></div></div>
+</div>
+
+<div class="row g-3">
+    <div class="col-lg-7">
+        <div class="card border-0 shadow-sm h-100">
+            <div class="card-body p-4">
+                <h4 class="fw-bold mb-1">Nuevo escaneo</h4>
+                <p class="text-muted small">Los equipos ausentes se conservan como desconectados. Un nuevo escaneo nunca borra el inventario anterior.</p>
+                <form id="form-scan" onsubmit="return false;">
+                    <input id="scan-site-id" type="hidden" value="{{ selected_site_id }}">
+                    <div class="row g-3">
+                        <div class="col-md-7"><label for="scan-cidr" class="form-label fw-semibold">Rango CIDR</label>
+                            <input id="scan-cidr" class="form-control font-monospace" value="{{ network_info.cidr }}"></div>
+                        <div class="col-md-5"><label for="scan-gateway" class="form-label fw-semibold">Gateway</label>
+                            <input id="scan-gateway" class="form-control font-monospace" value="{{ network_info.gateway or '' }}"></div>
+                    </div>
+                    <div id="scan-estimate" class="small text-muted mt-2" aria-live="polite">Calculando cobertura…</div>
+                    <div class="d-flex justify-content-between align-items-center mt-3">
+                        <span class="small text-muted">IP local: <strong id="net-ip">{{ network_info.local_ip }}</strong> · <span id="net-iface">{{ network_info.interface }}</span></span>
+                        <button type="button" id="btn-refresh-net" class="btn btn-sm btn-outline-secondary">Redetectar</button>
+                    </div>
+                    <hr>
+                    <div class="row g-3">
+                        <div class="col-md-4"><label for="scan-snmp-version" class="form-label fw-semibold">Consulta SNMP</label>
+                            <select id="scan-snmp-version" class="form-select"><option value="2c">SNMPv2c</option><option value="3">SNMPv3</option></select></div>
+                        <div class="col-md-8" id="snmp-v2-fields"><label for="scan-snmp" class="form-label fw-semibold">Comunidad</label>
+                            <input id="scan-snmp" class="form-control" value="public"></div>
+                    </div>
+                    <div id="snmp-v3-fields" class="row g-3 mt-0 d-none">
+                        <div class="col-md-6"><label for="scan-snmp-user" class="form-label">Usuario</label><input id="scan-snmp-user" class="form-control" autocomplete="off"></div>
+                        <div class="col-md-6"><label for="scan-snmp-auth-protocol" class="form-label">Autenticación</label>
+                            <select id="scan-snmp-auth-protocol" class="form-select"><option value="SHA256">SHA-256</option><option value="SHA1">SHA-1</option></select></div>
+                        <div class="col-md-6"><label for="scan-snmp-auth" class="form-label">Clave de autenticación</label><input id="scan-snmp-auth" type="password" class="form-control" autocomplete="off"></div>
+                        <div class="col-md-6"><label for="scan-snmp-priv" class="form-label">Clave AES</label><input id="scan-snmp-priv" type="password" class="form-control" autocomplete="off"></div>
+                    </div>
+                    <button type="button" id="btn-start-scan" class="btn btn-primary btn-lg mt-4 w-100">Iniciar escaneo de red</button>
+                </form>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-5">
+        <div class="card border-0 shadow-sm mb-3"><div class="card-body p-4">
+            <h5 class="fw-bold">Cobertura actual</h5>
+            <p class="text-muted small mb-2">{{ network_info.cidr }} · {{ used_ips }} de {{ total_ips }} IP observadas como activas</p>
+            <div class="progress mb-3" role="progressbar" aria-valuenow="{{ utilization_pct }}" aria-valuemin="0" aria-valuemax="100">
+                <div class="progress-bar" style="width: {{ utilization_pct }}%"></div></div>
+            <p class="small mb-1">Latencia media medida: <strong>{{ avg_latency ~ ' ms' if avg_latency is not none else 'Sin datos' }}</strong></p>
+            <p class="small mb-0">El mapa físico muestra únicamente enlaces observados o registrados manualmente.</p>
+        </div></div>
+        <div class="card border-0 shadow-sm mb-3"><div class="card-body p-4">
+            <h5 class="fw-bold">Redes conocidas</h5>
+            {% if known_networks %}
+                <ul class="list-group list-group-flush">
+                    {% for network in known_networks %}
+                        <li class="list-group-item px-0 d-flex justify-content-between gap-2">
+                            <a href="{{ url_for('devices', cidr=network.cidr) }}"><code>{{ network.cidr }}</code></a>
+                            <small class="text-muted">Gateway: {{ network.gateway or 'Sin dato' }}</small>
+                        </li>
+                    {% endfor %}
+                </ul>
+            {% else %}
+                <p class="small text-muted mb-0">Aún no hay subredes registradas. Aparecerán después del primer escaneo.</p>
+            {% endif %}
+        </div></div>
+        <div class="card border-0 shadow-sm mb-3"><div class="card-body p-4">
+            <h5 class="fw-bold">Infraestructura inventariada</h5>
+            <div class="d-flex flex-wrap gap-2">
+                {% for kind, count in stats.items() if kind != 'TOTAL' %}
+                    <a href="{{ url_for('devices', type=kind, status='ALL') }}" class="badge rounded-pill bg-light text-dark border text-decoration-none">{{ kind|replace('_', ' ') }} · {{ count }}</a>
+                {% else %}
+                    <span class="small text-muted">Sin equipos registrados todavía.</span>
+                {% endfor %}
+            </div>
+        </div></div>
+        <div class="card border-0 shadow-sm"><div class="card-body p-4">
+            <h5 class="fw-bold">Último escaneo</h5>
+            {% if latest_job %}
+                <p class="small mb-1">{{ latest_job.target_cidr }} · {{ latest_job.status }} · {{ latest_job.discovered_count }} equipos</p>
+                <p class="text-muted small mb-1">{{ latest_job.current_step }}</p>
+                {% if latest_job.warnings %}<p class="small text-warning-emphasis mb-0">Avisos: {{ latest_job.warnings }}</p>{% endif %}
+            {% else %}<p class="text-muted small mb-0">Aún no hay escaneos registrados.</p>{% endif %}
+        </div></div>
+    </div>
+</div>
+
+<div class="modal fade" id="scanProgressModal" data-bs-backdrop="static" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered"><div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title">Escaneando la red</h5></div>
+        <div class="modal-body">
+            <div class="progress mb-3"><div id="scan-progress-bar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 5%">5%</div></div>
+            <p id="scan-current-step" class="small mb-2">Iniciando…</p>
+            <p class="small text-muted">Equipos encontrados: <strong id="scan-discovered-count">0</strong></p>
+            <div id="scan-error-alert" class="alert alert-danger d-none"><span id="scan-error-text"></span></div>
+        </div>
+    </div></div>
+</div>
+{% endblock %}

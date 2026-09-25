@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %}Mapa de red{% endblock %}
+
+{% block content %}
+<div class="network-workspace">
+    <div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-3">
+        <div>
+            <p class="text-uppercase text-muted small fw-bold mb-1">Sede local / Exploración</p>
+            <h2 class="fw-bold mb-1">Mapa de red</h2>
+            <p class="text-muted mb-0">Explora conexiones observadas, redes lógicas y equipos sin enlace confirmado.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <a href="{{ url_for('devices') }}" class="btn btn-outline-primary">Abrir inventario</a>
+            <a href="{{ url_for('index') }}" class="btn btn-primary">Nuevo escaneo</a>
+        </div>
+    </div>
+
+    <div class="card border-0 shadow-sm mb-3">
+        <div class="card-body">
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-3">
+                <span class="fw-semibold me-2">Vista</span>
+                <div class="btn-group" role="group" aria-label="Vista del mapa">
+                    <button type="button" class="btn btn-primary map-view-btn" data-view="physical">Física</button>
+                    <button type="button" class="btn btn-outline-primary map-view-btn" data-view="logical">Lógica</button>
+                    <button type="button" class="btn btn-outline-primary map-view-btn" data-view="inventory">Inventario</button>
+                </div>
+                <span id="map-summary" class="text-muted small ms-auto"></span>
+            </div>
+            <div class="row g-2">
+                <div class="col-md-3"><label class="form-label small" for="topo-subnet-select">Subred</label>
+                    <select id="topo-subnet-select" class="form-select form-select-sm"><option value="">Todas las redes</option></select></div>
+                <div class="col-md-2"><label class="form-label small" for="topo-vlan-select">VLAN</label>
+                    <select id="topo-vlan-select" class="form-select form-select-sm"><option value="">Todas las VLAN</option></select></div>
+                <div class="col-md-2"><label class="form-label small" for="topo-status-select">Estado</label>
+                    <select id="topo-status-select" class="form-select form-select-sm">
+                        <option value="ONLINE">Solo conectados</option><option value="ALL">Incluir desconectados</option>
+                    </select></div>
+                <div class="col-md-2"><label class="form-label small" for="topo-method-select">Origen del enlace</label>
+                    <select id="topo-method-select" class="form-select form-select-sm">
+                        <option value="">Todos</option><option value="LLDP">LLDP</option>
+                        <option value="CDP">CDP</option><option value="MANUAL">Manual</option>
+                    </select></div>
+                <div class="col-md-3"><label class="form-label small" for="cy-search">Buscar equipo</label>
+                    <input id="cy-search" class="form-control form-control-sm" placeholder="IP, MAC, nombre o fabricante"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-xl-9">
+            <div id="cy-container" class="map-canvas card border-0 shadow-sm">
+                <div class="map-toolbar d-flex align-items-center gap-2">
+                    <span id="map-view-label" class="badge bg-dark">Conexiones físicas</span>
+                    <button id="btn-fit-cy" class="btn btn-sm btn-light ms-auto">Centrar</button>
+                    <button id="btn-export-png" class="btn btn-sm btn-light">Guardar PNG</button>
+                </div>
+                <div id="cy" role="img" aria-label="Mapa interactivo de la red"></div>
+                <div id="map-empty" class="map-empty d-none">No hay equipos para los filtros seleccionados.</div>
+            </div>
+        </div>
+        <div class="col-xl-3">
+            <div id="cy-sidepanel" class="card border-0 shadow-sm mb-3">
+                <div class="card-body">
+                    <p class="text-uppercase text-muted small fw-bold mb-2">Inspector</p>
+                    <h5 id="sp-title" class="fw-bold">Selecciona un equipo o enlace</h5>
+                    <p id="sp-hint" class="text-muted small">Aquí verás identidad, puertos, evidencia y última observación.</p>
+                    <dl id="sp-details" class="network-details"></dl>
+                    <a id="sp-btn-detail" class="btn btn-sm btn-primary d-none" href="#">Ver ficha completa</a>
+                </div>
+            </div>
+            <div class="card border-0 shadow-sm">
+                <div class="card-body">
+                    <h6 class="fw-bold">Hallazgos pendientes <span id="unresolved-count" class="badge bg-warning text-dark">0</span></h6>
+                    <p class="small text-muted">Vecinos que aún no se pudieron asociar a un equipo conocido.</p>
+                    <ul id="unresolved-list" class="small ps-3 mb-0"></ul>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="card border-0 shadow-sm mt-3">
+        <div class="card-body py-3">
+            <p class="small fw-semibold text-muted mb-2">Tipos de dispositivo</p>
+            <div id="map-device-legend" class="map-device-legend small text-muted" aria-label="Leyenda de tipos de dispositivo"></div>
+        </div>
+    </div>
+    <div class="d-flex flex-wrap gap-3 small text-muted mt-3">
+        <span><span class="legend-line legend-observed"></span> LLDP/CDP observado</span>
+        <span><span class="legend-line legend-manual"></span> Enlace manual</span>
+        <span id="gateway-legend" class="d-none"><span class="legend-line legend-gateway"></span> Gateway configurado para la subred (relación lógica)</span>
+        <span><span class="map-medium-key map-medium-wifi"></span> Wi-Fi identificado</span>
+        <span><span class="map-medium-key map-medium-wired"></span> Cable observado</span>
+        <span><span class="map-medium-key map-medium-unknown"></span> Medio no identificado</span>
+        <span>Un equipo aislado permanece visible porque su conexión no está confirmada.</span>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static', filename='js/topology.js') }}"></script>{% endblock %}

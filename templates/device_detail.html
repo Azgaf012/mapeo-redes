@@ -1,0 +1,411 @@
+{% extends "base.html" %}
+
+{% block title %}Detalle de Dispositivo - {{ device.hostname or device.ip }}{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+    <!-- Breadcrumb & Actions -->
+    <div class="col-12 d-flex justify-content-between align-items-center">
+        <div>
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb mb-1">
+                    <li class="breadcrumb-item"><a href="{{ url_for('devices', site_id=device.site_id) }}">Inventario</a></li>
+                    <li class="breadcrumb-item active">{{ device.hostname or device.ip }}</li>
+                </ol>
+            </nav>
+            <h3 class="fw-bold mb-0">
+                <i class="bi bi-hdd-network text-primary"></i> {{ device.hostname or device.ip }}
+                <span class="badge badge-type badge-{{ device.device_type }} fs-6 ms-2">{{ device.device_type }}</span>
+            </h3>
+        </div>
+        <div>
+            <a href="{{ url_for('devices', site_id=device.site_id) }}" class="btn btn-outline-secondary me-2">
+                <i class="bi bi-arrow-left"></i> Volver
+            </a>
+            <form method="POST" action="{{ url_for('delete_device', device_id=device.id) }}" class="d-inline" onsubmit="return confirm('¿Está seguro de eliminar este dispositivo del inventario?');">
+                <button type="submit" class="btn btn-outline-danger">
+                    <i class="bi bi-trash"></i> Eliminar
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Left Column: Technical Specs -->
+    <div class="col-lg-4">
+        <div class="card stat-card mb-4">
+            <div class="card-header bg-white py-3">
+                <span class="fw-bold"><i class="bi bi-cpu"></i> Parámetros Técnicos</span>
+            </div>
+            <div class="card-body">
+                <ul class="list-group list-group-flush small">
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Dirección IP:</span>
+                        <strong class="font-monospace text-dark">{{ device.ip }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Dirección MAC:</span>
+                        <strong class="font-monospace text-dark">{{ device.mac or 'No detectada' }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Sede Escolar:</span>
+                        <span>{{ device.site_name }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Subred CIDR:</span>
+                        <span>{{ device.network_cidr or '-' }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Sistema Operativo:</span>
+                        <strong class="text-primary">{{ device.os_info or 'No determinado' }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Latencia RTT:</span>
+                        <span>
+                            {% set lat = device.latency_ms or 0.0 %}
+                            <span class="latency-chip {% if lat < 15 %}latency-fast{% elif lat < 50 %}latency-med{% else %}latency-slow{% endif %}">
+                                <i class="bi bi-activity"></i> {{ "%.1f"|format(lat) }} ms
+                            </span>
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Seguridad:</span>
+                        <span>
+                            {% set sec = device.security_status or 'SECURE' %}
+                            <span class="security-badge security-{{ sec }}">
+                                {% if sec == 'SECURE' %}
+                                    <i class="bi bi-shield-check"></i> Seguro
+                                {% elif sec == 'WARNING' %}
+                                    <i class="bi bi-shield-exclamation"></i> Atención
+                                {% else %}
+                                    <i class="bi bi-shield-x"></i> Riesgo
+                                {% endif %}
+                            </span>
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Grupo / Dominio:</span>
+                        <span class="font-monospace">{{ device.workgroup or 'WORKGROUP' }}</span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Estado Actual:</span>
+                        <span>
+                            <span class="status-pill status-{{ device.status|lower }}"></span>
+                            <strong>{{ device.status }}</strong>
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Tiempo activo:</span>
+                        <strong>{{ (device.uptime_seconds // 86400) ~ ' días' if device.uptime_seconds is not none else 'Sin dato SNMP' }}</strong>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Modo de Registro:</span>
+                        <span>
+                            {% if device.is_manual %}
+                                <span class="badge bg-warning text-dark"><i class="bi bi-pencil-fill"></i> Modificado Manualmente</span>
+                            {% else %}
+                                <span class="badge bg-info text-dark">Automático (Escáner)</span>
+                            {% endif %}
+                        </span>
+                    </li>
+                    <li class="list-group-item d-flex justify-content-between px-0">
+                        <span class="text-muted">Último Descubrimiento:</span>
+                        <span>{{ device.last_seen or '-' }}</span>
+                    </li>
+                </ul>
+
+                <!-- Open Ports Container -->
+                <div class="mt-3 pt-2 border-top">
+                    <span class="text-muted small fw-bold d-block mb-1"><i class="bi bi-layers"></i> Servicios y Puertos Activos:</span>
+                    <div id="ports-detail-container" class="small">
+                        <script>
+                            document.addEventListener("DOMContentLoaded", function() {
+                                const container = document.getElementById("ports-detail-container");
+                                let portsRaw = {{ device.open_ports_list|tojson or '""' }};
+                                let ports = [];
+                                try {
+                                    ports = typeof portsRaw === "string" ? JSON.parse(portsRaw) : portsRaw;
+                                } catch(e) { ports = []; }
+                                if (ports && ports.length > 0) {
+                                    container.innerHTML = "";
+                                    ports.forEach(p => {
+                                        const chip = document.createElement("span");
+                                        chip.className = "port-chip";
+                                        chip.title = p.service || "";
+                                        chip.innerHTML = `<span class="port-chip-name">${p.name}</span><span class="port-chip-num">:${p.port}</span>`;
+                                        container.appendChild(chip);
+                                    });
+                                } else {
+                                    container.innerHTML = '<span class="text-muted fst-italic">Sin puertos públicos abiertos</span>';
+                                }
+                            });
+                        </script>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Center Column: Editable Information Form -->
+    <div class="col-lg-8">
+        <div class="card stat-card mb-4">
+            <div class="card-header bg-white py-3">
+                <span class="fw-bold"><i class="bi bi-pencil-square"></i> Información Técnica y Enriquecimiento Manual</span>
+            </div>
+            <div class="card-body">
+                <form method="POST" action="{{ url_for('device_detail', device_id=device.id) }}">
+                    <div class="row g-3">
+                        <div class="col-md-6">
+                            <label class="form-label small fw-semibold">Nombre de Host (Hostname):</label>
+                            <input type="text" name="hostname" class="form-control" value="{{ device.hostname or '' }}" placeholder="ej. SW-CORE-01">
+                        </div>
+                        <div class="col-md-6">
+                            <label class="form-label small fw-semibold">Tipo de Dispositivo:</label>
+                            <select name="device_type" class="form-select">
+                                <option value="ROUTER" {% if device.device_type == 'ROUTER' %}selected{% endif %}>Router</option>
+                                <option value="FIREWALL" {% if device.device_type == 'FIREWALL' %}selected{% endif %}>Firewall</option>
+                                <option value="SWITCH" {% if device.device_type == 'SWITCH' %}selected{% endif %}>Switch</option>
+                                <option value="ACCESS_POINT" {% if device.device_type == 'ACCESS_POINT' %}selected{% endif %}>Access Point</option>
+                                <option value="SERVER" {% if device.device_type == 'SERVER' %}selected{% endif %}>Servidor</option>
+                                <option value="SMART_TV" {% if device.device_type == 'SMART_TV' %}selected{% endif %}>Smart TV / Media</option>
+                                <option value="PC" {% if device.device_type == 'PC' %}selected{% endif %}>PC / Computadora</option>
+                                <option value="LAPTOP" {% if device.device_type == 'LAPTOP' %}selected{% endif %}>Laptop</option>
+                                <option value="PHONE" {% if device.device_type == 'PHONE' %}selected{% endif %}>Teléfono / Celular</option>
+                                <option value="PRINTER" {% if device.device_type == 'PRINTER' %}selected{% endif %}>Impresora</option>
+                                <option value="CAMERA" {% if device.device_type == 'CAMERA' %}selected{% endif %}>Cámara IP</option>
+                                <option value="NVR" {% if device.device_type == 'NVR' %}selected{% endif %}>NVR / DVR</option>
+                                <option value="UPS" {% if device.device_type == 'UPS' %}selected{% endif %}>UPS / Respaldo Eléctrico</option>
+                                <option value="CONTROLLER" {% if device.device_type == 'CONTROLLER' %}selected{% endif %}>Controlador Wi-Fi</option>
+                                <option value="UNKNOWN" {% if device.device_type == 'UNKNOWN' %}selected{% endif %}>Desconocido</option>
+                            </select>
+                        </div>
+
+                        <div class="col-md-4">
+                            <label class="form-label small fw-semibold">Fabricante:</label>
+                            <input type="text" name="vendor" class="form-control" value="{{ device.vendor or '' }}" placeholder="ej. Cisco, Ubiquiti, Fortinet">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-semibold">Modelo:</label>
+                            <input type="text" name="model" class="form-control" value="{{ device.model or '' }}" placeholder="ej. CBS350-24T, FortiGate 60F">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-semibold">Número de Serie:</label>
+                            <input type="text" name="serial_number" class="form-control" value="{{ device.serial_number or '' }}" placeholder="Serial de fábrica">
+                        </div>
+
+                        <div class="col-md-5">
+                            <label class="form-label small fw-semibold">Ubicación Física:</label>
+                            <input type="text" name="location" class="form-control" value="{{ device.location or '' }}" placeholder="ej. Datacenter, Aula 204, Dirección">
+                        </div>
+                        <div class="col-md-4">
+                            <label class="form-label small fw-semibold">Gabinete / Rack:</label>
+                            <input type="text" name="rack" class="form-control" value="{{ device.rack or '' }}" placeholder="ej. Rack 01, Rack Pared">
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small fw-semibold">Piso / Nivel:</label>
+                            <input type="text" name="floor" class="form-control" value="{{ device.floor or '' }}" placeholder="ej. 1, 2, Sótano">
+                        </div>
+
+                        <div class="col-12">
+                            <label class="form-label small fw-semibold">Observaciones / Notas Técnicas:</label>
+                            <textarea name="description" class="form-control" rows="3" placeholder="Detalles de puertos, estado del cableado, VLANs asociadas...">{{ device.description or '' }}</textarea>
+                        </div>
+
+                        <div class="col-12 text-end">
+                            <button type="submit" class="btn btn-primary px-4">
+                                <i class="bi bi-save"></i> Guardar Cambios
+                            </button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <!-- Connections & Neighbors Card -->
+        <div class="card stat-card">
+            <div class="card-header bg-white py-3 d-flex justify-content-between align-items-center">
+                <span class="fw-bold"><i class="bi bi-link-45deg"></i> Conexiones y Enlaces de Red ({{ connections|length }})</span>
+            </div>
+            <div class="card-body">
+                <div class="table-responsive mb-4">
+                    <table class="table table-sm table-hover align-middle">
+                        <thead class="table-light small">
+                            <tr>
+                                <th>Relación</th>
+                                <th>Dispositivo Enlazado</th>
+                                <th>IP</th>
+                                <th>Tipo</th>
+                                <th>Enlace</th>
+                                <th>Método</th>
+                                <th class="text-end">Acción</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% if connections %}
+                                {% for c in connections %}
+                                    <tr>
+                                        <td><small class="text-muted">{{ c.relation }}</small></td>
+                                        <td>
+                                            <a href="{{ url_for('device_detail', device_id=c.peer_id) }}" class="fw-semibold text-decoration-none">
+                                                {{ c.peer_name }}
+                                            </a>
+                                        </td>
+                                        <td><code class="text-dark">{{ c.peer_ip }}</code></td>
+                                        <td><span class="badge badge-type badge-{{ c.peer_type }}">{{ c.peer_type }}</span></td>
+                                        <td><small>{{ c.type }}</small></td>
+                                        <td>
+                                            <span class="badge {% if c.method == 'MANUAL' %}bg-primary{% else %}bg-light text-dark border{% endif %}">
+                                                {{ c.method }}
+                                            </span>
+                                        </td>
+                                        <td class="text-end">
+                                            <button class="btn btn-sm btn-outline-danger py-0 px-2" onclick="deleteConnection({{ c.id }})">
+                                                <i class="bi bi-x"></i>
+                                            </button>
+                                        </td>
+                                    </tr>
+                                {% endfor %}
+                            {% else %}
+                                <tr>
+                                    <td colspan="7" class="text-center py-3 text-muted small">
+                                        No hay conexiones registradas para este dispositivo.
+                                    </td>
+                                </tr>
+                            {% endif %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Add Manual Connection Section -->
+                <div class="p-3 bg-light rounded-3 border">
+                    <h6 class="fw-bold mb-2 small"><i class="bi bi-plus-circle"></i> Agregar Enlace Físico / Lógico Manual:</h6>
+                    <div class="row g-2 align-items-end">
+                        <div class="col-md-6">
+                            <label class="form-label small text-muted mb-1">Conectar con:</label>
+                            <select id="manual-target-id" class="form-select form-select-sm">
+                                <option value="">Seleccione otro equipo...</option>
+                                {% for peer in other_devices %}
+                                    <option value="{{ peer.id }}">{{ peer.hostname or peer.ip }} ({{ peer.ip }} - {{ peer.device_type }})</option>
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <label class="form-label small text-muted mb-1">Tipo de Enlace:</label>
+                            <select id="manual-conn-type" class="form-select form-select-sm">
+                                <option value="ETHERNET">Ethernet (RJ45)</option>
+                                <option value="FIBER">Fibra Óptica</option>
+                                <option value="UPLINK">Uplink / Troncal</option>
+                                <option value="WIRELESS">Wi-Fi / Inalámbrico</option>
+                            </select>
+                        </div>
+                        <div class="col-md-3">
+                            <button type="button" class="btn btn-sm btn-outline-primary w-100" onclick="addManualConnection()">
+                                <i class="bi bi-link"></i> Crear Enlace
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row g-3 mt-1">
+    <div class="col-xl-7">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <h5 class="fw-bold">Interfaces y puertos <span class="badge bg-secondary">{{ interfaces|length }}</span></h5>
+            <p class="small text-muted">Datos observados por SNMP. La ausencia de puertos puede indicar falta de acceso al equipo.</p>
+            <div class="table-responsive"><table class="table table-sm align-middle">
+                <thead><tr><th>Puerto</th><th>Estado</th><th>Velocidad</th><th>VLAN</th><th>Observado</th></tr></thead>
+                <tbody>
+                    {% for port in interfaces %}
+                    <tr><td><strong>{{ port.name }}</strong><small class="text-muted d-block">{{ port.description or '' }}</small></td>
+                        <td>{{ port.oper_status or 'Desconocido' }}</td><td>{{ port.speed or '—' }}</td>
+                        <td>{{ port.vlans or 'Sin dato' }}</td><td><small>{{ port.observed_at or '—' }}</small></td></tr>
+                    {% else %}<tr><td colspan="5" class="text-muted">No hay interfaces observadas.</td></tr>{% endfor %}
+                </tbody>
+            </table></div>
+        </div></div>
+    </div>
+    <div class="col-xl-5">
+        <div class="card border-0 shadow-sm h-100"><div class="card-body">
+            <h5 class="fw-bold">Enlaces físicos observados <span class="badge bg-secondary">{{ physical_links|length }}</span></h5>
+            <p class="small text-muted">LLDP o CDP con vecino resuelto. Los enlaces manuales aparecen en la sección anterior.</p>
+            <ul class="list-group list-group-flush">
+                {% for link in physical_links %}
+                    {% set peer_id = link.target_device_id if link.source_device_id == device.id else link.source_device_id %}
+                    <li class="list-group-item px-0">
+                        <a href="{{ url_for('device_detail', device_id=peer_id) }}">Equipo #{{ peer_id }}</a>
+                        <span class="badge bg-info text-dark">{{ link.protocol }}</span>
+                        <small class="d-block text-muted">{{ link.source_port or '?' }} ↔ {{ link.target_port or '?' }} · {{ link.observed_at }}</small>
+                    </li>
+                {% else %}<li class="list-group-item px-0 text-muted">Sin enlaces físicos confirmados.</li>{% endfor %}
+            </ul>
+        </div></div>
+    </div>
+    <div class="col-12">
+        <details class="card border-0 shadow-sm"><summary class="card-body fw-bold">Vecinos detectados sin identificar ({{ unresolved_neighbors|length }})</summary>
+            <div class="table-responsive px-3 pb-3"><table class="table table-sm">
+                <thead><tr><th>Puerto local</th><th>Vecino anunciado</th><th>Puerto remoto</th><th>Protocolo</th><th>Observado</th></tr></thead>
+                <tbody>{% for neighbor in unresolved_neighbors %}
+                    <tr><td>{{ neighbor.source_port or 'Sin dato' }}</td><td>{{ neighbor.neighbor_name or 'Sin nombre' }}</td>
+                        <td>{{ neighbor.neighbor_port or 'Sin dato' }}</td><td>{{ neighbor.protocol }}</td><td>{{ neighbor.observed_at }}</td></tr>
+                    {% else %}<tr><td colspan="5" class="text-muted">No hay vecinos pendientes de identificar.</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </details>
+    </div>
+    <div class="col-12">
+        <details class="card border-0 shadow-sm"><summary class="card-body fw-bold">Direcciones MAC aprendidas por el equipo ({{ mac_learnings|length }})</summary>
+            <div class="table-responsive px-3 pb-3"><table class="table table-sm">
+                <thead><tr><th>MAC</th><th>VLAN</th><th>Puerto</th><th>Observado</th></tr></thead>
+                <tbody>{% for row in mac_learnings %}<tr><td><code>{{ row.mac }}</code></td><td>{{ row.vlan_number or '—' }}</td>
+                    <td>{{ row.port_name or 'Sin dato' }}</td><td>{{ row.observed_at }}</td></tr>
+                    {% else %}<tr><td colspan="4" class="text-muted">Sin datos de tabla MAC.</td></tr>{% endfor %}</tbody>
+            </table></div>
+        </details>
+    </div>
+</div>
+
+<script>
+function addManualConnection() {
+    const targetSelect = document.getElementById("manual-target-id");
+    const typeSelect = document.getElementById("manual-conn-type");
+    const targetId = targetSelect.value;
+    const connType = typeSelect.value;
+
+    if (!targetId) {
+        alert("Por favor seleccione un equipo de destino.");
+        return;
+    }
+
+    fetch("/api/connections/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            site_id: {{ device.site_id }},
+            source_id: {{ device.id }},
+            target_id: parseInt(targetId),
+            connection_type: connType
+        })
+    })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            window.location.reload();
+        } else {
+            alert(res.error || "No se pudo crear la conexión.");
+        }
+    });
+}
+
+function deleteConnection(connId) {
+    if (!confirm("¿Desea eliminar este enlace?")) return;
+    fetch(`/api/connections/${connId}/delete`, { method: "POST" })
+    .then(r => r.json())
+    .then(res => {
+        if (res.success) {
+            window.location.reload();
+        }
+    });
+}
+</script>
+{% endblock %}
