@@ -1,5 +1,6 @@
 import csv
 import io
+import json
 
 from database.connection import get_db, init_db
 from repositories.device_repository import DeviceRepository
@@ -29,7 +30,11 @@ def test_scan_evidence_is_exported_and_manual_type_is_distinct(tmp_path, monkeyp
                         lambda ip: ("ap-aula.local", [], [ip]))
 
     def fingerprint(**kwargs):
-        kwargs["diagnostics"].update({"web_title": "Aruba AP-505", "web_port": 443})
+        kwargs["diagnostics"].update({
+            "web_title": "Aruba AP-505", "web_port": 443,
+            "web_probes": [{"port": 443, "status": 302,
+                            "redirect_host": "192.168.50.13", "redirect_port": 4343}],
+        })
         return "ACCESS_POINT", kwargs["hostname"], "AP-505"
 
     monkeypatch.setattr("services.discovery_service.fingerprint_device", fingerprint)
@@ -56,6 +61,8 @@ def test_scan_evidence_is_exported_and_manual_type_is_distinct(tmp_path, monkeyp
     assert row["Interfaces SNMP"] == "1"
     assert row["Título web"] == "Aruba AP-505"
     assert row["Puerto web"] == "443"
+    assert json.loads(row["Sondeos web (JSON)"])[0]["redirect_port"] == 4343
+    assert row["Modelo detectado"] == "AP-505"
 
 
 def test_legacy_devices_export_empty_evidence_columns(tmp_path):

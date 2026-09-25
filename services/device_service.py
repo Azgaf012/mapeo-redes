@@ -80,7 +80,7 @@ class DeviceService:
             "DNS inverso", "Nombre NetBIOS", "TTL ICMP", "Estado SNMP",
             "SNMP sysName", "SNMP sysDescr", "SNMP modelo",
             "Interfaces SNMP", "Vecinos SNMP", "Título web", "Puerto web",
-            "Advertencia SNMP"
+            "Advertencia SNMP", "Sondeos web (JSON)", "Modelo detectado"
         ])
         
         for d in devices:
@@ -134,6 +134,9 @@ class DeviceService:
                 evidence.get("web_title", ""),
                 evidence.get("web_port", ""),
                 evidence.get("snmp_warning", ""),
+                json.dumps(evidence["web_probes"], ensure_ascii=False)
+                if "web_probes" in evidence else "",
+                evidence.get("detected_model", ""),
             ])
             
         output.seek(0)

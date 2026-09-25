@@ -108,8 +108,10 @@ class DiscoveryService:
             if device_type != "UNKNOWN":
                 classification_source = "classifier"
         hostname = fp_host or hostname
+        detected_model = snmp.get("model") or fp_model or (snmp.get("sys_descr") or "")[:80]
         evidence = {
             "detected_type": device_type,
+            "detected_model": detected_model,
             "classification_source": classification_source,
             "dns_name": dns_name,
             "netbios_name": nb_name or "",
@@ -125,7 +127,7 @@ class DiscoveryService:
         }
         payload = {
             "network_id": network_id, "ip": ip, "mac": mac, "hostname": hostname,
-            "vendor": vendor, "model": snmp.get("model") or fp_model or (snmp.get("sys_descr") or "")[:80],
+            "vendor": vendor, "model": detected_model,
             "serial_number": snmp.get("serial_number") or "",
             "uptime_seconds": snmp.get("uptime_seconds"),
             "device_type": device_type, "latency_ms": ping.get("latency_ms"),

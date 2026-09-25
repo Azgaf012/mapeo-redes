@@ -1,6 +1,8 @@
 import socket
 import re
 import ssl
+import urllib.error
+import urllib.parse
 import urllib.request
 import psutil
 from scanner.classifier import is_access_point_identity
@@ -17,6 +19,53 @@ TV_PORTS = {
     5000: "Apple AirPlay Audio",
     9000: "Sony Bravia / Philips TV API"
 }
+
+
+class _NoDeviceRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, request, fp, code, msg, headers, newurl):
+        return None
+
+
+def _open_device_url(request, timeout_s, secure=False):
+    """Probe the device itself, without a system proxy or redirect to another host."""
+    handlers = [urllib.request.ProxyHandler({}), _NoDeviceRedirect()]
+    if secure:
+        context = ssl.create_default_context()
+        context.check_hostname = False
+        context.verify_mode = ssl.CERT_NONE
+        handlers.append(urllib.request.HTTPSHandler(context=context))
+    return urllib.request.build_opener(*handlers).open(request, timeout=timeout_s)
+
+
+def _web_response_details(response, port):
+    details = {"port": port}
+    status = getattr(response, "status", None) or getattr(response, "code", None)
+    if status is not None:
+        details["status"] = status
+    headers = getattr(response, "headers", None)
+    if headers:
+        for header, key in (("Server", "server"), ("Content-Type", "content_type")):
+            value = headers.get(header)
+            if value:
+                details[key] = value[:120]
+        location = headers.get("Location")
+        if location:
+            target = urllib.parse.urlsplit(location)
+            if target.hostname:
+                details["redirect_host"] = target.hostname
+                if target.port:
+                    details["redirect_port"] = target.port
+            elif target.path:
+                details["redirect_path"] = target.path[:80]
+    return details
+
+
+def _read_web_html(response, probe):
+    try:
+        return response.read(8192).decode("utf-8", errors="ignore")
+    except Exception as exc:
+        probe["body_error"] = exc.__class__.__name__
+        return ""
 
 def query_netbios_name(ip, timeout_s=0.4):
     """Sends a NetBIOS Node Status request (UDP 137) to obtain the computer name."""
@@ -58,7 +107,7 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
     if 8060 in open_ports:
         try:
             req = urllib.request.Request(f"http://{ip}:8060/query/device-info", headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            with _open_device_url(req, timeout_s) as resp:
                 content = resp.read().decode("utf-8", errors="ignore")
                 m_model = re.search(r"<model-name>([^<]+)</model-name>", content)
                 m_friendly = re.search(r"<user-device-name>([^<]+)</user-device-name>", content)
@@ -76,7 +125,7 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
     if 8001 in open_ports or 8002 in open_ports:
         try:
             req = urllib.request.Request(f"http://{ip}:8001/api/v2/", headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            with _open_device_url(req, timeout_s) as resp:
                 import json
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
                 dev = data.get("device", {})
@@ -93,7 +142,7 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
     if 8008 in open_ports or 8009 in open_ports:
         try:
             req = urllib.request.Request(f"http://{ip}:8008/setup/eureka_info", headers=headers)
-            with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+            with _open_device_url(req, timeout_s) as resp:
                 import json
                 data = json.loads(resp.read().decode("utf-8", errors="ignore"))
                 name = data.get("name") or "Google Cast Device"
@@ -108,46 +157,54 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
 
     # 4. Device web titles, including local self-signed HTTPS management pages.
     first_web_title = {}
+    web_probes = []
+    classification = {}
     for port in [443, 8443, 80, 8080]:
         if port in open_ports:
+            secure = port in (443, 8443)
+            scheme = "https" if secure else "http"
+            req = urllib.request.Request(f"{scheme}://{ip}:{port}/", headers=headers)
             try:
-                secure = port in (443, 8443)
-                scheme = "https" if secure else "http"
-                req = urllib.request.Request(f"{scheme}://{ip}:{port}/", headers=headers)
-                options = {"timeout": timeout_s}
-                if secure:
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    options["context"] = context
-                with urllib.request.urlopen(req, **options) as resp:
-                    html = resp.read(8192).decode("utf-8", errors="ignore")
-                    m_title = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
-                    if m_title:
-                        title = m_title.group(1).strip()
-                        web_evidence = {"web_title": title[:200], "web_port": port}
-                        if not first_web_title:
-                            first_web_title = web_evidence
-                        t_low = title.lower()
-                        
-                        # TV indicators
-                        if any(w in t_low for w in ["tv", "webos", "bravia", "tizen", "roku", "chromecast"]):
-                            return {"device_type": "SMART_TV", "model": title[:60], **web_evidence}
-                        if is_access_point_identity(snmp_info={"model": title}):
-                            return {"device_type": "ACCESS_POINT", "model": title[:60], **web_evidence}
-                        # Router indicators
-                        if any(w in t_low for w in ["router", "wireless", "gateway", "tp-link", "mikrotik", "d-link", "netgear", "asus", "zte", "huawei"]):
-                            return {"device_type": "ROUTER", "model": title[:60], **web_evidence}
-                        # Printer indicators
-                        if any(w in t_low for w in ["printer", "laserjet", "deskjet", "epson", "brother", "kyocera", "xerox", "canon"]):
-                            return {"device_type": "PRINTER", "model": title[:60], **web_evidence}
-                        # Camera indicators
-                        if any(w in t_low for w in ["camera", "hikvision", "dahua", "nvr", "dvr", "ip camera", "web service"]):
-                            return {"device_type": "CAMERA", "model": title[:60], **web_evidence}
-            except Exception:
-                pass
+                with _open_device_url(req, timeout_s, secure=secure) as resp:
+                    probe = _web_response_details(resp, port)
+                    html = _read_web_html(resp, probe)
+            except urllib.error.HTTPError as exc:
+                probe = _web_response_details(exc, port)
+                html = _read_web_html(exc, probe)
+            except Exception as exc:
+                reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+                probe = {"port": port, "error": reason.__class__.__name__}
+                html = ""
 
-    return first_web_title
+            web_probes.append(probe)
+            m_title = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
+            title = m_title.group(1).strip() if m_title else ""
+            web_evidence = {"web_title": title[:200], "web_port": port} if title else {}
+            if web_evidence and not first_web_title:
+                first_web_title = web_evidence
+
+            # Aruba Instant AP members redirect to the virtual controller on 4343.
+            if (probe.get("status") in (301, 302, 303, 307, 308)
+                    and probe.get("redirect_port") == 4343
+                    and "arubanetworks.com" in html.lower()):
+                probe["aruba_marker"] = True
+                if not classification:
+                    classification = {"device_type": "ACCESS_POINT", "model": "Aruba Instant AP",
+                                      **web_evidence}
+
+            t_low = title.lower()
+            if not classification and any(w in t_low for w in ["tv", "webos", "bravia", "tizen", "roku", "chromecast"]):
+                classification = {"device_type": "SMART_TV", "model": title[:60], **web_evidence}
+            elif not classification and title and is_access_point_identity(snmp_info={"model": title}):
+                classification = {"device_type": "ACCESS_POINT", "model": title[:60], **web_evidence}
+            elif not classification and any(w in t_low for w in ["router", "wireless", "gateway", "tp-link", "mikrotik", "d-link", "netgear", "asus", "zte", "huawei"]):
+                classification = {"device_type": "ROUTER", "model": title[:60], **web_evidence}
+            elif not classification and any(w in t_low for w in ["printer", "laserjet", "deskjet", "epson", "brother", "kyocera", "xerox", "canon"]):
+                classification = {"device_type": "PRINTER", "model": title[:60], **web_evidence}
+            elif not classification and any(w in t_low for w in ["camera", "hikvision", "dahua", "nvr", "dvr", "ip camera", "web service"]):
+                classification = {"device_type": "CAMERA", "model": title[:60], **web_evidence}
+
+    return {**first_web_title, **classification, "web_probes": web_probes}
 
 def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gateway=False, is_local=False, snmp_info=None, diagnostics=None):
     """
@@ -194,7 +251,7 @@ def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_g
     # 4. Probe TV-specific ports & HTTP Titles (Roku, Samsung, Google Cast, webOS, AirPlay)
     http_fp = grab_http_title_and_model(ip, ports)
     if diagnostics is not None:
-        diagnostics.update({key: http_fp[key] for key in ("web_title", "web_port") if key in http_fp})
+        diagnostics.update({key: http_fp[key] for key in ("web_title", "web_port", "web_probes") if key in http_fp})
     if http_fp.get("device_type") == "SMART_TV":
         return "SMART_TV", http_fp.get("hostname") or h, http_fp.get("model") or "Smart TV / Streaming"
     elif http_fp.get("device_type"):

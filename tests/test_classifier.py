@@ -78,13 +78,13 @@ def test_hpe_access_point_is_identified_from_https_title(monkeypatch):
         def read(self, limit):
             return b"<html><title>Aruba AP-505 Access Point</title></html>"
 
-    def fake_urlopen(request, timeout, context=None):
+    def fake_urlopen(request, timeout_s, secure=False):
         assert request.full_url == "https://192.168.50.55:443/"
-        assert context is not None
+        assert secure
         return Response()
 
     monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
-    monkeypatch.setattr(fingerprint.urllib.request, "urlopen", fake_urlopen)
+    monkeypatch.setattr(fingerprint, "_open_device_url", fake_urlopen)
     diagnostics = {}
     result = fingerprint.fingerprint_device(
         "192.168.50.55", mac="24:F2:7F:CF:A8:56",
@@ -92,7 +92,8 @@ def test_hpe_access_point_is_identified_from_https_title(monkeypatch):
         diagnostics=diagnostics)
     assert result[0] == "ACCESS_POINT"
     assert "AP-505" in result[2]
-    assert diagnostics == {"web_title": "Aruba AP-505 Access Point", "web_port": 443}
+    assert diagnostics == {"web_title": "Aruba AP-505 Access Point", "web_port": 443,
+                           "web_probes": [{"port": 443}]}
 
 
 def test_unrecognized_web_title_is_available_for_later_review(monkeypatch):
@@ -109,12 +110,90 @@ def test_unrecognized_web_title_is_available_for_later_review(monkeypatch):
             return b"<html><title>Device Management Console</title></html>"
 
     monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
-    monkeypatch.setattr(fingerprint.urllib.request, "urlopen", lambda *args, **kwargs: Response())
+    monkeypatch.setattr(fingerprint, "_open_device_url", lambda *args, **kwargs: Response())
     diagnostics = {}
     result = fingerprint.fingerprint_device("192.168.50.55", open_ports=[443],
                                             diagnostics=diagnostics)
     assert result[0] == "UNKNOWN"
-    assert diagnostics == {"web_title": "Device Management Console", "web_port": 443}
+    assert diagnostics == {"web_title": "Device Management Console", "web_port": 443,
+                           "web_probes": [{"port": 443}]}
+
+
+def test_aruba_controller_redirect_identifies_ap_and_records_other_web_ports(monkeypatch):
+    import io
+    import urllib.error
+    from scanner import fingerprint
+
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+    requested_ports = []
+
+    def fake_open(request, timeout_s, secure=False):
+        port = 443 if secure else int(request.full_url.split(":")[2].split("/")[0])
+        requested_ports.append(port)
+        if port == 8080:
+            raise urllib.error.HTTPError(request.full_url, 403, "Access denied",
+                                         {"Server": "tinyproxy/1.8.2"},
+                                         io.BytesIO(b"<title>403 Access denied</title>"))
+        raise urllib.error.HTTPError(
+            request.full_url, 302, "Found",
+            {"Location": "https://192.168.50.13:4343/", "Content-Type": "text/html"},
+            io.BytesIO(b"<TITLE>302 </TITLE><A HREF='http://www.arubanetworks.com'></A>"),
+        )
+
+    monkeypatch.setattr(fingerprint, "_open_device_url", fake_open)
+    diagnostics = {}
+    result = fingerprint.fingerprint_device(
+        "192.168.50.55", vendor="Hewlett Packard Enterprise",
+        open_ports=[22, 80, 443, 8080], diagnostics=diagnostics)
+    assert result[0] == "ACCESS_POINT"
+    assert result[2] == "Aruba Instant AP"
+    assert requested_ports == [443, 80, 8080]
+    assert diagnostics["web_probes"][0] == {
+        "port": 443, "status": 302, "content_type": "text/html",
+        "redirect_host": "192.168.50.13", "redirect_port": 4343,
+        "aruba_marker": True,
+    }
+    assert diagnostics["web_probes"][2] == {
+        "port": 8080, "status": 403, "server": "tinyproxy/1.8.2",
+    }
+
+
+def test_redirect_to_4343_alone_does_not_imply_access_point(monkeypatch):
+    import io
+    import urllib.error
+    from scanner import fingerprint
+
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+
+    def fake_open(request, timeout_s, secure=False):
+        raise urllib.error.HTTPError(
+            request.full_url, 302, "Found", {"Location": "https://192.168.50.13:4343/"},
+            io.BytesIO(b"<title>302</title>"),
+        )
+
+    monkeypatch.setattr(fingerprint, "_open_device_url", fake_open)
+    assert fingerprint.fingerprint_device("192.168.50.55", open_ports=[80])[0] == "UNKNOWN"
+
+
+def test_web_probe_bypasses_proxy_and_keeps_redirect_on_device(monkeypatch):
+    from scanner import fingerprint
+
+    handlers_seen = []
+
+    class Opener:
+        def open(self, request, timeout):
+            return "response"
+
+    def fake_build_opener(*handlers):
+        handlers_seen.extend(handlers)
+        return Opener()
+
+    monkeypatch.setattr(fingerprint.urllib.request, "build_opener", fake_build_opener)
+    request = fingerprint.urllib.request.Request("http://192.168.50.55/")
+    assert fingerprint._open_device_url(request, 0.6) == "response"
+    assert any(isinstance(h, fingerprint.urllib.request.ProxyHandler) and not h.proxies
+               for h in handlers_seen)
+    assert any(isinstance(h, fingerprint._NoDeviceRedirect) for h in handlers_seen)
 
 
 def test_hpe_vendor_and_mac_alone_do_not_imply_ap(monkeypatch):
