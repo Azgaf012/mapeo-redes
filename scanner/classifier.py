@@ -48,7 +48,7 @@ def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gate
             return "FIREWALL"
         if any(w in snmp_descr for w in ["catalyst", "cbs", "procurve", "switch", "edgeswitch", "sw-"]):
             return "SWITCH"
-        if any(w in snmp_descr for w in ["unifi", "access point", "wap", "airmax", "ap-"]):
+        if any(w in snmp_descr for w in ["access point", "wap", "ap-"]):
             return "ACCESS_POINT"
         if any(w in snmp_descr for w in ["laserjet", "pagecenter", "printer", "epson", "brother"]):
             return "PRINTER"
@@ -58,7 +58,7 @@ def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gate
     # Rule 3: Hostname patterns
     if any(h_lower.startswith(prefix) for prefix in ["sw-", "sw_", "switch"]):
         return "SWITCH"
-    if any(h_lower.startswith(prefix) for prefix in ["ap-", "ap_", "unifi", "wifi"]):
+    if any(h_lower.startswith(prefix) for prefix in ["ap-", "ap_", "wifi"]):
         return "ACCESS_POINT"
     if any(h_lower.startswith(prefix) for prefix in ["rt-", "rt_", "router", "gw-"]):
         return "ROUTER"
@@ -86,17 +86,9 @@ def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gate
     if (8080 in ports or 8443 in ports) and ("ubiquiti" in v_lower or "unifi" in h_lower):
         return "CONTROLLER"
 
-    if 161 in ports:  # SNMP Agent open
-        if any(net in v_lower for net in ["cisco", "aruba", "huawei", "hpe"]):
-            return "SWITCH"
-        if "mikrotik" in v_lower:
-            return "ROUTER"
-
     # Rule 5: Vendor-based heuristics
     if any(tv in v_lower for tv in ["roku", "gaoshengda", "hisense", "tcl", "skyworth", "vizio", "smart tv"]):
         return "SMART_TV"
-    if "móvil" in v_lower or "movil" in v_lower or "privad" in v_lower:
-        return "PHONE"
     if any(mfg in v_lower for mfg in ["xiaomi", "oppo", "vivo", "realme", "motorola"]):
         return "PHONE"
     if "fortinet" in v_lower:
@@ -105,9 +97,6 @@ def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gate
         return "CAMERA"
     if any(prn in v_lower for prn in ["epson", "brother", "kyocera", "canon", "xerox"]):
         return "PRINTER"
-    if "ubiquiti" in v_lower:
-        return "ACCESS_POINT"
-
     # Rule 6: Workstation / Server heuristics
     if 3389 in ports:  # RDP
         if any(srv in h_lower for srv in ["srv", "server", "dc", "sql", "ad"]):

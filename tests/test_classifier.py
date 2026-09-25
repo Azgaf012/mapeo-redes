@@ -18,9 +18,14 @@ def test_classify_by_ports():
     dev_type = classify_device("192.168.1.60", open_ports=[9100], vendor="Epson")
     assert dev_type == "PRINTER"
 
-    # SNMP Cisco Switch
-    dev_type = classify_device("192.168.1.2", open_ports=[161, 22], vendor="Cisco")
+    # A switch description is evidence; the Cisco vendor alone is not.
+    dev_type = classify_device("192.168.1.2", open_ports=[161, 22], vendor="Cisco",
+                               snmp_info={"sys_descr": "Cisco Catalyst 2960 Switch"})
     assert dev_type == "SWITCH"
+    assert classify_device("192.168.1.2", open_ports=[161], vendor="Cisco") == "UNKNOWN"
+    assert classify_device("192.168.1.3", vendor="Aruba, a Hewlett Packard Enterprise Company") == "UNKNOWN"
+    assert classify_device("192.168.1.4", vendor="Ubiquiti Networks") == "UNKNOWN"
+    assert classify_device("192.168.1.5", hostname="UniFi-USW-24") == "UNKNOWN"
 
     # SMB Workstation
     dev_type = classify_device("192.168.1.100", open_ports=[445], vendor="Dell")
@@ -55,7 +60,47 @@ def test_access_point_identity_wins_over_generic_snmp_switch_heuristic(monkeypat
 
     switch = {"sys_descr": "Ubiquiti UniFi Switch USW-24", "sys_name": "SW-CORE"}
     assert fingerprint.fingerprint_device("10.0.0.9", vendor="Ubiquiti",
-                                          open_ports=[161], snmp_info=switch)[0] == "SWITCH"
+                                          open_ports=[161], snmp_info=switch)[0] == "UNKNOWN"
+    assert classify_device("10.0.0.9", vendor="Ubiquiti",
+                           open_ports=[161], snmp_info=switch) == "SWITCH"
+
+
+def test_hpe_access_point_is_identified_from_https_title(monkeypatch):
+    from scanner import fingerprint
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            return b"<html><title>Aruba AP-505 Access Point</title></html>"
+
+    def fake_urlopen(request, timeout, context=None):
+        assert request.full_url == "https://192.168.50.55:443/"
+        assert context is not None
+        return Response()
+
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+    monkeypatch.setattr(fingerprint.urllib.request, "urlopen", fake_urlopen)
+    result = fingerprint.fingerprint_device(
+        "192.168.50.55", mac="24:F2:7F:CF:A8:56",
+        vendor="Hewlett Packard Enterprise", open_ports=[443])
+    assert result[0] == "ACCESS_POINT"
+    assert "AP-505" in result[2]
+
+
+def test_hpe_vendor_and_mac_alone_do_not_imply_ap(monkeypatch):
+    from scanner import fingerprint
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+    assert fingerprint.fingerprint_device(
+        "192.168.50.55", mac="24:F2:7F:CF:A8:56",
+        vendor="Hewlett Packard Enterprise", open_ports=[])[0] == "UNKNOWN"
+    assert fingerprint.fingerprint_device(
+        "192.168.50.13", vendor="Aruba, a Hewlett Packard Enterprise Company",
+        open_ports=[])[0] == "UNKNOWN"
 
 def test_classify_by_hostname():
     assert classify_device("192.168.1.3", hostname="SW-PISO2") == "SWITCH"
@@ -73,8 +118,9 @@ def test_classify_smart_tv_and_phone():
     # Roku by vendor
     assert classify_device("192.168.1.42", vendor="Roku, Inc.") == "SMART_TV"
 
-    # Phone by randomized / private MAC
-    assert classify_device("192.168.1.43", vendor="Dispositivo Móvil (MAC Privada)") == "PHONE"
+    # A private MAC does not identify the device as a phone.
+    assert classify_device("192.168.1.43", vendor="MAC privada/aleatoria") == "UNKNOWN"
+    assert classify_device("192.168.1.43", vendor="Dispositivo Móvil (MAC Privada)") == "UNKNOWN"
 
     # Phone by mobile brand
     assert classify_device("192.168.1.44", vendor="Xiaomi Communications") == "PHONE"
@@ -95,10 +141,13 @@ def test_fingerprint_smart_tv():
     dev_type, name, model = fingerprint_device("192.168.1.52", vendor="Amazon Technologies Inc.")
     assert dev_type == "SMART_TV"
 
-def test_fingerprint_phone():
-    # Randomized MAC
+def test_fingerprint_phone(monkeypatch):
+    from scanner import fingerprint
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+
+    # Randomized MACs can belong to many types of equipment.
     dev_type, name, model = fingerprint_device("192.168.1.70", vendor="Dispositivo Móvil (MAC Privada)")
-    assert dev_type == "PHONE"
+    assert dev_type == "UNKNOWN"
 
     # Apple iPhone/iPad without PC ports
     dev_type, name, model = fingerprint_device("192.168.1.71", vendor="Apple, Inc.", hostname="iPhone-de-Carlos")

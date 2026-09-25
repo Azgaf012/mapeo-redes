@@ -17,3 +17,4 @@ def test_curated_vendor_lookup():
 def test_unknown_or_empty_mac():
     assert lookup_vendor("") == "Desconocido"
     assert lookup_vendor(None) == "Desconocido"
+    assert lookup_vendor("AA:22:D7:A1:D8:5B") == "MAC privada/aleatoria"

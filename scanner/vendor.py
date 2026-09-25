@@ -89,9 +89,9 @@ def lookup_vendor(mac_address):
     if len(clean_mac) < 6:
         return "Desconocido"
 
-    # Check for randomized / private MAC (Android / iOS / Windows Wi-Fi Privacy)
+    # Locally administered MACs do not reveal a manufacturer or device type.
     if is_locally_administered_mac(clean_mac):
-        return "Dispositivo Móvil / Privado (Android/iOS/Win)"
+        return "MAC privada/aleatoria"
 
     prefix = f"{clean_mac[0:2]}:{clean_mac[2:4]}:{clean_mac[4:6]}"
     

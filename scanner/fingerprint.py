@@ -1,5 +1,6 @@
 import socket
 import re
+import ssl
 import urllib.request
 import psutil
 from scanner.classifier import is_access_point_identity
@@ -47,7 +48,7 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
     """
     Probes open web and TV ports to extract device title, model, and metadata.
     """
-    candidate_ports = [p for p in open_ports if p in [80, 443, 8001, 8008, 8060, 8080, 3000, 5000, 7000]]
+    candidate_ports = [p for p in open_ports if p in [80, 443, 8443, 8001, 8008, 8060, 8080, 3000, 5000, 7000]]
     if not candidate_ports:
         return {}
 
@@ -105,12 +106,20 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
         except Exception:
             return {"device_type": "SMART_TV", "model": "Google Cast / Android TV"}
 
-    # 4. Standard HTTP port 80 / 8080 title extraction
-    for port in [80, 8080]:
+    # 4. Device web titles, including local self-signed HTTPS management pages.
+    for port in [443, 8443, 80, 8080]:
         if port in open_ports:
             try:
-                req = urllib.request.Request(f"http://{ip}:{port}/", headers=headers)
-                with urllib.request.urlopen(req, timeout=timeout_s) as resp:
+                secure = port in (443, 8443)
+                scheme = "https" if secure else "http"
+                req = urllib.request.Request(f"{scheme}://{ip}:{port}/", headers=headers)
+                options = {"timeout": timeout_s}
+                if secure:
+                    context = ssl.create_default_context()
+                    context.check_hostname = False
+                    context.verify_mode = ssl.CERT_NONE
+                    options["context"] = context
+                with urllib.request.urlopen(req, **options) as resp:
                     html = resp.read(8192).decode("utf-8", errors="ignore")
                     m_title = re.search(r"<title[^>]*>([^<]+)</title>", html, re.IGNORECASE)
                     if m_title:
@@ -120,7 +129,7 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
                         # TV indicators
                         if any(w in t_low for w in ["tv", "webos", "bravia", "tizen", "roku", "chromecast"]):
                             return {"device_type": "SMART_TV", "model": title[:60]}
-                        if any(w in t_low for w in ["access point", "access-point", "unifi ap", "aruba instant ap"]):
+                        if is_access_point_identity(snmp_info={"model": title}):
                             return {"device_type": "ACCESS_POINT", "model": title[:60]}
                         # Router indicators
                         if any(w in t_low for w in ["router", "wireless", "gateway", "tp-link", "mikrotik", "d-link", "netgear", "asus", "zte", "huawei"]):
@@ -215,9 +224,6 @@ def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_g
 
     # 10. Check Smartphones / Mobile Phones
     # If device uses randomized MAC, or vendor is Xiaomi/Oppo/Vivo/Apple/Samsung and has no PC/server ports
-    if "móvil" in v_low or "movil" in v_low or "privad" in v_low:
-        return "PHONE", h or "Celular / Móvil", "Smartphone (MAC Privada)"
-
     if any(mfg in v_low for mfg in ["xiaomi", "oppo", "vivo", "oneplus", "motorola", "realme"]):
         return "PHONE", h or f"Smartphone {vendor}", f"Teléfono Móvil ({vendor})"
 
@@ -233,11 +239,5 @@ def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_g
 
     if "samsung" in v_low and not any(p in ports for p in [8001, 8002, 135, 445]):
         return "PHONE", h or "Samsung Galaxy", "Teléfono Samsung Galaxy"
-
-    # 11. Switches & Access Points
-    if 161 in ports or any(sw in v_low for sw in ["cisco", "aruba", "huawei", "hpe"]):
-        return "SWITCH", h, f"Switch ({vendor})"
-    if "ubiquiti" in v_low:
-        return "ACCESS_POINT", h, "Ubiquiti UniFi Access Point"
 
     return "UNKNOWN", h, ""
