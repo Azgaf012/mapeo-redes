@@ -80,6 +80,12 @@ def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gate
     if any(h_lower.startswith(prefix) for prefix in ["srv-", "server", "dc0", "sql", "pve", "proxmox"]):
         return "SERVER"
 
+    # Windows computer names remain useful when SMB/RDP is filtered or asleep.
+    if re.match(r"^(?:laptop|notebook|macbook)[-_]", h_lower):
+        return "LAPTOP"
+    if re.match(r"^(?:desktop|pc|workstation)[-_]", h_lower):
+        return "PC"
+
     # Rule 4: Port-based heuristics
     if any(p in ports for p in [8001, 8002, 8060, 3000, 8008, 7000]):
         return "SMART_TV"

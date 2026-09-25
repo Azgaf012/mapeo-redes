@@ -212,6 +212,12 @@ def test_classify_by_hostname():
     assert classify_device("192.168.1.5", hostname="SRV-ACADEMICO") == "SERVER"
     assert classify_device("192.168.1.6", hostname="PRN-DIRECCION") == "PRINTER"
 
+def test_classify_workstation_from_hostname_when_ports_are_closed():
+    assert classify_device("192.168.49.19", hostname="DESKTOP-NNAIS1N",
+                           vendor="MAC privada/aleatoria") == "PC"
+    assert classify_device("192.168.48.117", hostname="LAPTOP-2JN8VFIK",
+                           vendor="MAC privada/aleatoria") == "LAPTOP"
+
 def test_classify_smart_tv_and_phone():
     # Samsung TV via port 8001
     assert classify_device("192.168.1.40", open_ports=[8001]) == "SMART_TV"
