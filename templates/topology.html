@@ -7,7 +7,7 @@
         <div>
             <p class="text-uppercase text-muted small fw-bold mb-1">Sede local / Exploración</p>
             <h2 class="fw-bold mb-1">Mapa de red</h2>
-            <p class="text-muted mb-0">Explora conexiones observadas, redes lógicas y equipos sin enlace confirmado.</p>
+            <p class="text-muted mb-0">Explora conexiones observadas, redes lógicas y equipos sin enlace confirmado. Haz clic en un grupo para abrir sus equipos.</p>
         </div>
         <div class="d-flex gap-2">
             <a href="{{ url_for('devices') }}" class="btn btn-outline-primary">Abrir inventario</a>
@@ -43,6 +43,10 @@
                 <div class="col-md-3"><label class="form-label small" for="cy-search">Buscar equipo</label>
                     <input id="cy-search" class="form-control form-control-sm" placeholder="IP, MAC, nombre o fabricante"></div>
             </div>
+            <div id="topo-group-filter" class="row g-2 mt-1">
+                <div class="col-md-5"><label class="form-label small" for="topo-group-select">Abrir grupo, switch o AP</label>
+                    <select id="topo-group-select" class="form-select form-select-sm"><option value="">Resumen completo</option></select></div>
+            </div>
         </div>
     </div>
 
@@ -51,6 +55,10 @@
             <div id="cy-container" class="map-canvas card border-0 shadow-sm">
                 <div class="map-toolbar d-flex align-items-center gap-2">
                     <span id="map-view-label" class="badge bg-dark">Conexiones físicas</span>
+                    <span id="map-group-page" class="badge bg-light text-dark d-none"></span>
+                    <button id="btn-group-back" class="btn btn-sm btn-light d-none">Volver al resumen</button>
+                    <button id="btn-group-prev" class="btn btn-sm btn-light d-none" aria-label="Página anterior">Anterior</button>
+                    <button id="btn-group-next" class="btn btn-sm btn-light d-none" aria-label="Página siguiente">Siguiente</button>
                     <button id="btn-fit-cy" class="btn btn-sm btn-light ms-auto">Centrar</button>
                     <button id="btn-export-png" class="btn btn-sm btn-light">Guardar PNG</button>
                 </div>
@@ -86,6 +94,7 @@
     <div class="d-flex flex-wrap gap-3 small text-muted mt-3">
         <span><span class="legend-line legend-observed"></span> LLDP/CDP observado</span>
         <span><span class="legend-line legend-manual"></span> Enlace manual</span>
+        <span><span class="legend-line legend-group"></span> Grupo visual por switch o AP; la asociación por MAC no confirma un enlace actual</span>
         <span id="gateway-legend" class="d-none"><span class="legend-line legend-gateway"></span> Gateway configurado para la subred (relación lógica)</span>
         <span><span class="map-medium-key map-medium-wifi"></span> Wi-Fi identificado</span>
         <span><span class="map-medium-key map-medium-wired"></span> Cable observado</span>
@@ -95,4 +104,4 @@
 </div>
 {% endblock %}
 
-{% block scripts %}<script src="{{ url_for('static', filename='js/topology.js') }}"></script>{% endblock %}
+{% block scripts %}<script src="{{ url_for('static', filename='js/map-overview.js') }}"></script><script src="{{ url_for('static', filename='js/topology.js') }}"></script>{% endblock %}

@@ -2,6 +2,7 @@ import socket
 import re
 import urllib.request
 import psutil
+from scanner.classifier import is_access_point_identity
 
 # Specific TV & media streaming ports
 TV_PORTS = {
@@ -119,6 +120,8 @@ def grab_http_title_and_model(ip, open_ports, timeout_s=0.6):
                         # TV indicators
                         if any(w in t_low for w in ["tv", "webos", "bravia", "tizen", "roku", "chromecast"]):
                             return {"device_type": "SMART_TV", "model": title[:60]}
+                        if any(w in t_low for w in ["access point", "access-point", "unifi ap", "aruba instant ap"]):
+                            return {"device_type": "ACCESS_POINT", "model": title[:60]}
                         # Router indicators
                         if any(w in t_low for w in ["router", "wireless", "gateway", "tp-link", "mikrotik", "d-link", "netgear", "asus", "zte", "huawei"]):
                             return {"device_type": "ROUTER", "model": title[:60]}
@@ -160,6 +163,10 @@ def fingerprint_device(ip, mac="", hostname="", vendor="", open_ports=None, is_g
         if any(f in v_low for f in ["fortinet", "palo alto", "sonicwall", "sophos", "checkpoint"]):
             return "FIREWALL", h, "Firewall / Gateway Perimetral"
         return "ROUTER", h, f"Router Gateway ({vendor or 'Genérico'})"
+
+    if is_access_point_identity(h, snmp_info):
+        info = snmp_info or {}
+        return "ACCESS_POINT", h or info.get("sys_name") or "", info.get("model") or "Punto de acceso"
 
     # 3. Query NetBIOS name for Windows PCs / Laptops
     nb_name = query_netbios_name(ip)

@@ -42,11 +42,15 @@ document.addEventListener("DOMContentLoaded", () => {
     const status = document.getElementById("topo-status-select");
     const method = document.getElementById("topo-method-select");
     const search = document.getElementById("cy-search");
+    const groupSelect = document.getElementById("topo-group-select");
     const viewButtons = [...document.querySelectorAll(".map-view-btn")];
     let view = "physical";
     let graph = null;
     let requestNumber = 0;
     let searchTimer;
+    let lastData = null;
+    let expandedGroup = null;
+    let groupPage = 0;
 
     function setOptions(select, values, label, getValue, getLabel) {
         const selected = select.value;
@@ -101,6 +105,16 @@ document.addEventListener("DOMContentLoaded", () => {
         if (data.kind === "device") {
             addDetail("Medio", { WIFI: "Wi-Fi", WIRED: "Cable", UNKNOWN: "No identificado" }[data.connection_medium] || "No identificado");
             addDetail("Evidencia del medio", data.medium_evidence);
+            if (data.switch_association) {
+                addDetail("Switch asociado por MAC", data.switch_association.switch_id);
+                addDetail("Puerto donde se aprendió la MAC", data.switch_association.port);
+                addDetail("Alcance de la asociación", data.switch_association.evidence);
+            }
+            if (data.ap_association) {
+                addDetail("AP asociado por MAC", data.ap_association.ap_name);
+                addDetail("Radio del AP", data.ap_association.radio);
+                addDetail("Alcance de la asociación", data.ap_association.evidence);
+            }
         }
         addDetail("Evidencia", data.evidence);
         addDetail("Subred / gateway", data.gateway);
@@ -155,7 +169,30 @@ document.addEventListener("DOMContentLoaded", () => {
     function render(data) {
         if (graph) graph.destroy();
         const deviceCount = data.elements.filter(element => element.data.kind === "device").length;
-        const elements = data.elements.map(element => {
+        const overview = view === "physical"
+            ? MapOverview.buildPhysicalOverview(data.elements, expandedGroup, groupPage)
+            : { elements: data.elements, groups: [], activeGroup: null };
+        const active = overview.activeGroup;
+        document.getElementById("topo-group-filter").classList.toggle("d-none", view !== "physical");
+        groupSelect.replaceChildren(new Option("Resumen completo", ""));
+        overview.groups.forEach(group => groupSelect.add(new Option(
+            `${group.parentType === "ap" ? "AP" : group.parentType === "switch" ? "Switch" : "Subred"}: ${group.title} (${group.count})`, group.id)));
+        groupSelect.value = active ? active.id : "";
+        const pageLabel = document.getElementById("map-group-page");
+        const back = document.getElementById("btn-group-back");
+        const previous = document.getElementById("btn-group-prev");
+        const next = document.getElementById("btn-group-next");
+        pageLabel.classList.toggle("d-none", !active);
+        back.classList.toggle("d-none", !active);
+        previous.classList.toggle("d-none", !active || active.pages < 2);
+        next.classList.toggle("d-none", !active || active.pages < 2);
+        if (active) {
+            pageLabel.textContent = `${active.title} · ${active.count} equipos · página ${active.page + 1}/${active.pages}`;
+            previous.disabled = active.page === 0;
+            next.disabled = active.page === active.pages - 1;
+        }
+        const visibleNodeCount = overview.elements.filter(element => element.group === "nodes").length;
+        const elements = overview.elements.map(element => {
             if (element.group !== "nodes") return element;
             const type = element.data.kind === "device" ? element.data.device_type
                 : element.data.kind === "type" ? element.data.name : element.data.kind;
@@ -172,7 +209,7 @@ document.addEventListener("DOMContentLoaded", () => {
             ? `${deviceCount} equipos · ${edgeCount("GATEWAY_CONFIG")} relaciones con gateway`
             : view === "inventory"
                 ? `${deviceCount} equipos · ${data.elements.filter(element => element.data.kind === "type").length} tipos`
-                : `${deviceCount} equipos · ${data.elements.filter(element => element.group === "edges").length} enlaces visibles`;
+                : `${deviceCount} equipos · ${data.elements.filter(element => element.group === "edges").length} enlaces · ${overview.groups.length} grupos`;
         document.getElementById("map-view-label").textContent = {
             physical: "Conexiones físicas", logical: "Subred → gateway → equipos", inventory: "Equipos por tipo"
         }[view];
@@ -188,6 +225,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     "background-fit": "contain", "background-width": "62%", "background-height": "62%",
                     "background-repeat": "no-repeat", "label": "data(label)", "color": "#172033",
                     "font-size": 11, "text-wrap": "wrap", "text-max-width": 115,
+                    "min-zoomed-font-size": 9,
                     "text-valign": "bottom", "text-margin-y": 8, "width": 48, "height": 48,
                     "border-width": 2, "border-color": "#ffffff"
                 }},
@@ -196,6 +234,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 { selector: 'node[kind = "type"], node[kind = "gateway"]', style: { "shape": "round-rectangle" } },
                 { selector: 'node[kind = "network"]', style: { "shape": "hexagon" } },
                 { selector: 'node[kind = "gateway"]', style: { "border-color": "#b45309", "border-style": "dashed" } },
+                { selector: 'node[kind = "map_group"]', style: {
+                    "shape": "round-rectangle", "width": 150, "height": 82,
+                    "background-color": "#e0f2fe", "background-image": "none",
+                    "border-color": "#0284c7", "border-width": 2,
+                    "color": "#0c4a6e", "font-weight": "bold", "text-max-width": 145,
+                    "min-zoomed-font-size": 0, "text-valign": "center", "text-margin-y": 0
+                } },
+                { selector: 'node[kind = "map_group"][parent_type = "ap"]', style: {
+                    "background-color": "#dcfce7", "border-color": "#047857", "color": "#065f46"
+                } },
                 { selector: 'node[status = "OFFLINE"]', style: { "background-color": "#a4acba", "opacity": 0.65 } },
                 { selector: 'node[kind = "device"][connection_medium = "WIFI"]',
                   style: { "border-color": "#0284c7", "border-style": "dashed", "border-width": 4 } },
@@ -213,13 +261,30 @@ document.addEventListener("DOMContentLoaded", () => {
                 { selector: 'edge[discovery_method = "NETWORK_GATEWAY"]',
                   style: { "line-color": "#d97706", "target-arrow-color": "#d97706", "width": 2 } },
                 { selector: 'edge[discovery_method = "NETWORK_MEMBERSHIP"], edge[discovery_method = "VLAN_MEMBERSHIP"], edge[discovery_method = "INVENTORY_GROUP"]',
-                  style: { "line-color": "#cbd5e1", "target-arrow-color": "#cbd5e1", "width": 1 } }
+                  style: { "line-color": "#cbd5e1", "target-arrow-color": "#cbd5e1", "width": 1 } },
+                { selector: 'edge[discovery_method = "MAP_SUMMARY"]',
+                  style: { "line-color": "#0284c7", "target-arrow-color": "#0284c7",
+                      "line-style": "dotted", "target-arrow-shape": "none", "width": 2 } },
+                { selector: 'edge[discovery_method = "MAP_SUMMARY"][parent_type = "ap"]',
+                  style: { "line-color": "#047857" } }
             ],
             layout: view === "physical"
-                ? { name: "cose", padding: 42, animate: false, nodeRepulsion: 6500 }
+                ? visibleNodeCount > 220
+                    ? { name: "grid", padding: 80, spacingFactor: 1.4 }
+                    : { name: "cose", padding: 80, animate: false, nodeRepulsion: 14000,
+                        idealEdgeLength: 130, componentSpacing: 140, nodeOverlap: 30, numIter: 350 }
                 : { name: "breadthfirst", directed: true, padding: 42, spacingFactor: 1.3 }
         });
-        graph.on("tap", "node", event => inspect(event.target.data(), false));
+        graph.on("tap", "node", event => {
+            const node = event.target.data();
+            if (node.kind === "map_group") {
+                expandedGroup = node.group_id;
+                groupPage = 0;
+                render(lastData);
+                return;
+            }
+            inspect(node, false);
+        });
         graph.on("tap", "edge", event => inspect(event.target.data(), true));
         graph.on("tap", event => {
             if (event.target === graph) {
@@ -228,6 +293,14 @@ document.addEventListener("DOMContentLoaded", () => {
                 document.getElementById("sp-btn-detail").classList.add("d-none");
             }
         });
+        if (active) {
+            requestAnimationFrame(() => {
+                if (!graph) return;
+                const ids = new Set([...active.visibleMemberIds, active.parentId]);
+                const focus = graph.nodes().filter(node => ids.has(node.id()));
+                if (focus.length) graph.fit(focus, 55);
+            });
+        }
     }
 
     async function load() {
@@ -245,6 +318,9 @@ document.addEventListener("DOMContentLoaded", () => {
             setOptions(subnet, data.available_subnets || [], "Todas las redes", item => item, item => item);
             setOptions(vlan, data.available_vlans || [], "Todas las VLAN",
                        item => item.vlan_id, item => `${item.vlan_id} · ${item.name}`);
+            lastData = data;
+            expandedGroup = null;
+            groupPage = 0;
             render(data);
         } catch (error) {
             document.getElementById("map-summary").textContent = error.message;
@@ -261,9 +337,27 @@ document.addEventListener("DOMContentLoaded", () => {
         load();
     }));
     [subnet, vlan, status, method].forEach(select => select.addEventListener("change", load));
+    groupSelect.addEventListener("change", () => {
+        expandedGroup = groupSelect.value || null;
+        groupPage = 0;
+        render(lastData);
+    });
     search.addEventListener("input", () => {
         clearTimeout(searchTimer);
         searchTimer = setTimeout(load, 250);
+    });
+    document.getElementById("btn-group-back").addEventListener("click", () => {
+        expandedGroup = null;
+        groupPage = 0;
+        render(lastData);
+    });
+    document.getElementById("btn-group-prev").addEventListener("click", () => {
+        groupPage--;
+        render(lastData);
+    });
+    document.getElementById("btn-group-next").addEventListener("click", () => {
+        groupPage++;
+        render(lastData);
     });
     document.getElementById("btn-fit-cy").addEventListener("click", () => graph?.fit(undefined, 35));
     document.getElementById("btn-export-png").addEventListener("click", () => {

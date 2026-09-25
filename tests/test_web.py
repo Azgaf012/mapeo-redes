@@ -59,6 +59,24 @@ def test_api_topology_data(client):
     assert "counts" in json_data
 
 
+def test_manual_wifi_connection_appears_in_physical_map(client):
+    devices = DeviceRepository(TestConfig.DATABASE_PATH)
+    ap_id = devices.upsert_discovered(1, {
+        "ip": "10.8.0.2", "device_type": "ACCESS_POINT"})
+    client_id = devices.upsert_discovered(1, {
+        "ip": "10.8.0.3", "device_type": "PHONE"})
+    response = client.post("/api/connections/create", json={
+        "site_id": 1, "source_id": ap_id, "target_id": client_id,
+        "connection_type": "WIFI",
+    })
+    assert response.status_code == 200
+    elements = client.get("/api/topology/data?view=physical").get_json()["elements"]
+    assert any(item["group"] == "edges"
+               and item["data"].get("connection_type") == "WIFI"
+               and item["data"].get("discovery_method") == "MANUAL"
+               for item in elements)
+
+
 def test_map_views_and_offline_filter(client):
     devices = DeviceRepository(TestConfig.DATABASE_PATH)
     devices.upsert_discovered(1, {"ip": "10.3.0.2", "device_type": "SWITCH"})

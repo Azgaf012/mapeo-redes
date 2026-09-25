@@ -1,6 +1,9 @@
 """Build distinct physical, logical and inventory maps for one installation."""
 
 import ipaddress
+import re
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
 
 from repositories.network_detail_repository import NetworkDetailRepository
 from repositories.network_repository import NetworkRepository
@@ -15,6 +18,77 @@ class TopologyService:
         self.site_repo = site_repo
         self.network_repo = network_repo or NetworkRepository(device_repo.db_path)
         self.detail_repo = detail_repo or NetworkDetailRepository(device_repo.db_path)
+
+    def _mac_associations(self, site_id, devices):
+        """Associate MACs with unique switch ports or recently observed AP radios."""
+        def normalized(mac):
+            return "".join(char for char in (mac or "").upper() if char in "0123456789ABCDEF")
+
+        port_macs = defaultdict(set)
+        switch_sightings = defaultdict(list)
+        ap_sightings = defaultdict(list)
+        for row in self.detail_repo.get_infrastructure_mac_learnings(site_id):
+            mac = normalized(row["mac"])
+            if len(mac) != 12:
+                continue
+            if row["device_type"] == "SWITCH":
+                port = (row["infrastructure_id"], row["interface_id"])
+                port_macs[port].add(mac)
+                switch_sightings[mac].append(row)
+            elif any(re.match(r"^(?:wlan|wifi|wi-fi|wireless|radio|ath|ssid|vap|wl)(?=$|[-_./:\s\d])",
+                              str(row.get(field) or ""), re.I)
+                     for field in ("port", "description")):
+                ap_sightings[mac].append(row)
+        visible_switches = {device["id"] for device in devices
+                            if device["device_type"] == "SWITCH"}
+        visible_aps = {device["id"]: device for device in devices
+                       if device["device_type"] == "ACCESS_POINT"}
+        switch_associations = {}
+        ap_associations = {}
+        cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
+        for device in devices:
+            mac = normalized(device.get("mac"))
+            candidates = [row for row in switch_sightings.get(mac, [])
+                          if row["infrastructure_id"] in visible_switches
+                          and row["infrastructure_id"] != device["id"]
+                          and len(port_macs[(row["infrastructure_id"], row["interface_id"])]) == 1]
+            switches = {row["infrastructure_id"] for row in candidates}
+            if len(switches) == 1:
+                switch_associations[device["id"]] = {
+                    "switch_id": str(candidates[0]["infrastructure_id"]),
+                    "port": candidates[0]["port"],
+                    "evidence": "MAC aprendida en un puerto del switch; no confirma cable directo.",
+                }
+            recent = []
+            for row in ap_sightings.get(mac, []):
+                if row["infrastructure_id"] not in visible_aps:
+                    continue
+                try:
+                    observed = datetime.fromisoformat(row["observed_at"])
+                    if observed.tzinfo:
+                        observed = observed.astimezone(timezone.utc).replace(tzinfo=None)
+                except (TypeError, ValueError):
+                    continue
+                if observed >= cutoff:
+                    recent.append((observed, row))
+            if not recent:
+                continue
+            latest = max(observed for observed, _ in recent)
+            latest_rows = [row for observed, row in recent if observed == latest]
+            locations = {(row["infrastructure_id"], row["interface_id"])
+                         for row in latest_rows}
+            if len(locations) != 1:
+                continue
+            ap = latest_rows[0]
+            ap_device = visible_aps[ap["infrastructure_id"]]
+            ap_associations[device["id"]] = {
+                "ap_id": str(ap["infrastructure_id"]),
+                "ap_name": ap_device["hostname"] or ap_device["ip"],
+                "radio": ap["port"],
+                "observed_at": ap["observed_at"],
+                "evidence": "MAC observada en radio del AP; no confirma asociación Wi-Fi actual.",
+            }
+        return switch_associations, ap_associations
 
     def get_cytoscape_data(self, site_id, network_cidr=None, view="physical",
                            status="ONLINE", vlan=None, method=None, search=None):
@@ -45,6 +119,9 @@ class TopologyService:
             devices.append(device)
 
         ids = {device["id"] for device in devices}
+        switch_associations, ap_associations = (
+            self._mac_associations(site_id, devices) if view == "physical" else ({}, {})
+        )
         physical_links = self.detail_repo.get_links(site_id)
         medium_by_id = {}
         for link in physical_links:
@@ -70,6 +147,9 @@ class TopologyService:
                 "label": f"{device['hostname'] or device['ip']}\n({device['ip']})"
                          + (f"\n{medium_label}" if medium_label else ""),
                 "name": device["hostname"] or device["ip"], "ip": device["ip"],
+                "network_cidr": device.get("network_cidr"),
+                "switch_association": switch_associations.get(device["id"]),
+                "ap_association": ap_associations.get(device["id"]),
                 "mac": device["mac"] or "", "hostname": device["hostname"] or "",
                 "vendor": device["vendor"] or "", "model": device["model"] or "",
                 "device_type": device["device_type"], "status": device["status"],

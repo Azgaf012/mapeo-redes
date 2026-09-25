@@ -33,6 +33,30 @@ def test_classify_by_snmp_sysdescr():
     dev_type = classify_device("192.168.1.20", snmp_info={"sys_descr": "UniFi AP-AC-Pro 4.3.24"})
     assert dev_type == "ACCESS_POINT"
 
+
+def test_access_point_identity_wins_over_generic_snmp_switch_heuristic(monkeypatch):
+    import scanner.fingerprint as fingerprint
+    monkeypatch.setattr(fingerprint, "query_netbios_name", lambda ip: None)
+    monkeypatch.setattr(fingerprint, "grab_http_title_and_model", lambda ip, ports, timeout_s=0.6: {})
+    samples = [
+        {"sys_descr": "Cisco Aironet 1830 Access Point", "sys_name": "AP-LIBRARY"},
+        {"sys_descr": "Aruba Instant AP-515", "sys_name": "WIFI-PISO-2"},
+        {"sys_descr": "Ubiquiti UniFi UAP-AC-Pro", "sys_name": "UAP-AC-PRO"},
+    ]
+    for snmp in samples:
+        result = fingerprint.fingerprint_device("10.0.0.8", vendor="Cisco",
+                                               open_ports=[161, 80], snmp_info=snmp)
+        assert result[0] == "ACCESS_POINT"
+        assert classify_device("10.0.0.8", vendor="Cisco", open_ports=[161],
+                               snmp_info=snmp) == "ACCESS_POINT"
+
+    assert classify_device("10.0.0.10", hostname="device.local", vendor="Cisco",
+                           snmp_info={"sys_name": "AP-LIBRARY"}) == "ACCESS_POINT"
+
+    switch = {"sys_descr": "Ubiquiti UniFi Switch USW-24", "sys_name": "SW-CORE"}
+    assert fingerprint.fingerprint_device("10.0.0.9", vendor="Ubiquiti",
+                                          open_ports=[161], snmp_info=switch)[0] == "SWITCH"
+
 def test_classify_by_hostname():
     assert classify_device("192.168.1.3", hostname="SW-PISO2") == "SWITCH"
     assert classify_device("192.168.1.4", hostname="AP-AULA-101") == "ACCESS_POINT"

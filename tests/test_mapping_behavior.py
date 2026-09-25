@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from database.connection import init_db
+from database.connection import get_db, init_db
 from repositories.connection_repository import ConnectionRepository
 from repositories.device_repository import DeviceRepository
 from repositories.network_repository import NetworkRepository
@@ -196,6 +196,79 @@ def test_two_observed_ports_between_same_devices_are_retained(mapping_db):
     ], known)
     assert len(details.get_links(site_id)) == 2
     assert len(details.get_unresolved(site_id)) == 1
+
+
+def test_unique_switch_mac_port_groups_device_without_inventing_physical_link(mapping_db):
+    site_id = SiteRepository(mapping_db).get_all()[0]["id"]
+    devices = DeviceRepository(mapping_db)
+    switch_id = devices.upsert_discovered(site_id, {
+        "ip": "10.4.0.2", "hostname": "SW-ACCESS", "device_type": "SWITCH"})
+    pc_id = devices.upsert_discovered(site_id, {
+        "ip": "10.4.0.3", "mac": "aa:bb:cc:dd:ee:01", "device_type": "PC"})
+    details = NetworkDetailRepository(mapping_db)
+    details.save_inventory(site_id, switch_id, {
+        "interfaces": [{"if_index": 1, "name": "Gi0/1"}],
+        "mac_learnings": [{"if_index": 1, "mac": "AA-BB-CC-DD-EE-01", "vlan": 10}],
+    })
+    service = TopologyService(devices, ConnectionRepository(mapping_db),
+                              SiteRepository(mapping_db), detail_repo=details)
+
+    data = service.get_cytoscape_data(site_id, view="physical")
+    pc = next(item["data"] for item in data["elements"]
+              if item["group"] == "nodes" and item["data"]["id"] == str(pc_id))
+    assert pc["switch_association"]["switch_id"] == str(switch_id)
+    assert pc["switch_association"]["port"] == "Gi0/1"
+    assert not any(item["group"] == "edges" for item in data["elements"])
+
+    details.save_inventory(site_id, switch_id, {
+        "interfaces": [{"if_index": 1, "name": "Gi0/1"}],
+        "mac_learnings": [{"if_index": 1, "mac": "AA-BB-CC-DD-EE-02", "vlan": 10}],
+    })
+    data = service.get_cytoscape_data(site_id, view="physical")
+    pc = next(item["data"] for item in data["elements"]
+              if item["group"] == "nodes" and item["data"]["id"] == str(pc_id))
+    assert pc["switch_association"] is None
+
+
+def test_ap_radio_mac_groups_clients_but_wired_uplink_does_not(mapping_db):
+    site_id = SiteRepository(mapping_db).get_all()[0]["id"]
+    devices = DeviceRepository(mapping_db)
+    ap_id = devices.upsert_discovered(site_id, {
+        "ip": "10.5.0.2", "hostname": "AP-LIBRARY", "device_type": "ACCESS_POINT"})
+    wifi_id = devices.upsert_discovered(site_id, {
+        "ip": "10.5.0.3", "mac": "AA:BB:CC:00:00:01", "device_type": "LAPTOP"})
+    second_wifi_id = devices.upsert_discovered(site_id, {
+        "ip": "10.5.0.5", "mac": "AA:BB:CC:00:00:03", "device_type": "PHONE"})
+    wired_id = devices.upsert_discovered(site_id, {
+        "ip": "10.5.0.4", "mac": "AA:BB:CC:00:00:02", "device_type": "PC"})
+    details = NetworkDetailRepository(mapping_db)
+    details.save_inventory(site_id, ap_id, {
+        "interfaces": [{"if_index": 1, "name": "wlan0"},
+                       {"if_index": 2, "name": "eth0"}],
+        "mac_learnings": [
+            {"if_index": 1, "mac": "AA:BB:CC:00:00:01", "vlan": 10},
+            {"if_index": 1, "mac": "AA:BB:CC:00:00:03", "vlan": 10},
+            {"if_index": 2, "mac": "AA:BB:CC:00:00:02", "vlan": 10},
+        ],
+    })
+    service = TopologyService(devices, ConnectionRepository(mapping_db),
+                              SiteRepository(mapping_db), detail_repo=details)
+    data = service.get_cytoscape_data(site_id, view="physical")
+    nodes = {item["data"]["id"]: item["data"] for item in data["elements"]
+             if item["group"] == "nodes"}
+    assert nodes[str(wifi_id)]["ap_association"]["ap_id"] == str(ap_id)
+    assert nodes[str(wifi_id)]["ap_association"]["radio"] == "wlan0"
+    assert nodes[str(second_wifi_id)]["ap_association"]["ap_id"] == str(ap_id)
+    assert nodes[str(wired_id)]["ap_association"] is None
+    assert not any(item["group"] == "edges" for item in data["elements"])
+
+    with get_db(mapping_db) as conn:
+        conn.execute("UPDATE mac_learnings SET observed_at='2000-01-01 00:00:00' WHERE device_id=?",
+                     (ap_id,))
+    stale = service.get_cytoscape_data(site_id, view="physical")
+    stale_nodes = {item["data"]["id"]: item["data"] for item in stale["elements"]
+                   if item["group"] == "nodes"}
+    assert stale_nodes[str(wifi_id)]["ap_association"] is None
 
 
 def test_migration_adds_new_columns_to_old_tables():

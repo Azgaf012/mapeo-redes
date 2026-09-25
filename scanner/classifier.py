@@ -1,3 +1,25 @@
+import re
+
+
+AP_MODEL = re.compile(r"\b(?:uap|eap|iap|air-cap|air-ap|ap)(?:[-_][a-z0-9]+|[0-9]+)", re.I)
+
+
+def is_access_point_identity(hostname="", snmp_info=None):
+    """Identify an AP from its own name or model, not a shared vendor or port."""
+    info = snmp_info if isinstance(snmp_info, dict) else {}
+    description = " ".join(str(info.get(key) or "") for key in ("sys_descr", "model"))
+    names = (hostname or "", info.get("sys_name") or "")
+    description_lower = description.lower()
+    if "switch" in description_lower or "controller" in description_lower:
+        return False
+    if "access point" in description_lower or "access-point" in description_lower:
+        return True
+    if AP_MODEL.search(description):
+        return True
+    return any(re.match(r"^(?:ap|wap|uap|eap|iap)[-_0-9]", name, re.I)
+               for name in names)
+
+
 def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gateway=False, snmp_info=None):
     """
     Applies heuristic scoring rules to classify an endpoint into one of:
@@ -16,6 +38,9 @@ def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gate
         if any(f in v_lower for f in ["fortinet", "palo alto", "sonicwall", "sophos", "checkpoint"]) or "firewall" in h_lower:
             return "FIREWALL"
         return "ROUTER"
+
+    if is_access_point_identity(hostname, snmp_info):
+        return "ACCESS_POINT"
 
     # Rule 2: SNMP System Description inspection
     if snmp_descr:

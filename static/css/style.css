@@ -377,6 +377,7 @@ footer {
 #cy-container.map-canvas { height: 680px; min-height: 680px; position: relative; overflow: hidden; }
 .map-canvas #cy { width: 100%; height: 640px; }
 .map-toolbar { position: absolute; top: 14px; left: 14px; right: 14px; z-index: 2; pointer-events: none; }
+.map-toolbar { flex-wrap: wrap; }
 .map-toolbar > * { pointer-events: auto; }
 .map-empty { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); color: #64748b; text-align: center; }
 .network-details { display: grid; grid-template-columns: 44% 56%; gap: 8px 6px; font-size: .88rem; overflow-wrap: anywhere; }
@@ -384,6 +385,7 @@ footer {
 .network-details dd { margin: 0; font-weight: 600; }
 .legend-line { display: inline-block; width: 24px; height: 3px; vertical-align: middle; margin-right: 5px; background: #7c91ac; }
 .legend-manual { background: #8b5cf6; border-top: 1px dashed #fff; }
+.legend-group { background: #0284c7; border-top: 1px dotted #fff; }
 .legend-gateway { background: #d97706; border-top: 1px dashed #fff; }
 .map-medium-key { display: inline-block; width: 15px; height: 15px; border-radius: 50%; vertical-align: -3px; margin-right: 5px; background: #fff; border: 3px solid #fff; box-shadow: 0 0 0 1px #cbd5e1; }
 .map-medium-wifi { border-color: #0284c7; border-style: dashed; }

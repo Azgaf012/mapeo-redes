@@ -169,6 +169,19 @@ class NetworkDetailRepository:
                 WHERE m.device_id=? ORDER BY m.vlan_number, m.mac
             """, (device_id,)).fetchall()]
 
+    def get_infrastructure_mac_learnings(self, site_id):
+        """MACs seen by switches and APs; these are not physical links."""
+        with get_db(self.db_path) as conn:
+            return [dict(row) for row in conn.execute("""
+                SELECT m.device_id AS infrastructure_id, d.device_type,
+                       m.interface_id, i.name AS port, i.description,
+                       m.mac, m.observed_at
+                FROM mac_learnings m
+                JOIN devices d ON d.id=m.device_id
+                JOIN interfaces i ON i.id=m.interface_id
+                WHERE d.site_id=? AND d.device_type IN ('SWITCH', 'ACCESS_POINT')
+            """, (site_id,)).fetchall()]
+
     def find_devices_by_port(self, site_id, term):
         with get_db(self.db_path) as conn:
             rows = conn.execute("""
