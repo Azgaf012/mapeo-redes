@@ -143,6 +143,56 @@ class DeviceRepository:
                   json.dumps(evidence, ensure_ascii=False), device_id))
             return True
 
+    def apply_stored_identity(self, device_id, device_type, vendor, model, evidence_update):
+        """Persist a re-identification of an unidentified, non-manual device."""
+        with get_db(self.db_path) as conn:
+            device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if not device or device["is_manual"] or device["device_type"] != "UNKNOWN":
+                return False
+            try:
+                evidence = json.loads(device["scan_evidence"] or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                evidence = {}
+            evidence.update(evidence_update)
+            evidence["detected_type"] = device_type
+            conn.execute("""
+                UPDATE devices SET device_type=?, vendor=CASE WHEN ?<>'' THEN ? ELSE vendor END,
+                    model=CASE WHEN ?<>'' THEN ? ELSE model END, scan_evidence=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+            """, (device_type, vendor or "", vendor or "", model or "", model or "",
+                  json.dumps(evidence, ensure_ascii=False), device_id))
+            return True
+
+    def update_vendor(self, device_id, vendor):
+        with get_db(self.db_path) as conn:
+            conn.execute("UPDATE devices SET vendor=? WHERE id=? AND is_manual=0", (vendor, device_id))
+
+    def find_stale_private_clients(self, site_id, days):
+        """Offline, non-manual devices with a randomized MAC not seen for ``days`` days."""
+        from datetime import datetime, timedelta, timezone
+        from scanner.vendor import is_locally_administered_mac
+
+        cutoff = (datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=days)
+                  ).strftime("%Y-%m-%d %H:%M:%S")
+        found = []
+        with get_db(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT id, mac, last_seen FROM devices WHERE site_id=? AND status='OFFLINE' "
+                "AND is_manual=0 AND mac<>''", (site_id,)).fetchall()
+        for row in rows:
+            clean = "".join(char for char in (row["mac"] or "") if char.isalnum())
+            if (row["last_seen"] or "") < cutoff and is_locally_administered_mac(clean):
+                found.append(row["id"])
+        return found
+
+    def delete_many(self, device_ids):
+        with get_db(self.db_path) as conn:
+            conn.executemany("DELETE FROM devices WHERE id=?", [(item,) for item in device_ids])
+        return len(device_ids)
+
     def confirm_access_point(self, device_id, source):
         """An explicit AP export can identify an unknown AP without changing manual entries."""
         with get_db(self.db_path) as conn:

@@ -1,4 +1,5 @@
 import ipaddress
+import json
 import os
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
 from config import Config
@@ -15,9 +16,11 @@ from services.topology_service import TopologyService
 from services.device_service import DeviceService
 from services.ap_association_service import ApAssociationService
 from services.site_service import SiteService
+from scanner.drivers.base import HostFacts
 from scanner.identity import IdentityService
 from scanner.identity.overrides import normalize_type
 from scanner.network import detect_network_config
+from scanner.vendor import lookup_vendor
 
 def create_app(config_class=Config):
     app = Flask(__name__)
@@ -366,6 +369,66 @@ def create_app(config_class=Config):
                     {"match_type": row.get("match_type"), "match_value": row.get("match_value")}):
                 updated += 1
         return jsonify({**result, "updated": updated})
+
+    @app.route("/api/identity/reclassify", methods=["POST"])
+    def api_identity_reclassify():
+        """Re-run the offline identification rules over stored, unidentified devices."""
+        identity = discovery_service.identity
+        if not identity:
+            return jsonify({"error": "La identificación avanzada está desactivada."}), 404
+        site_id = active_site_id()
+        counts = {}
+        examined = updated = 0
+        for device in (device_repo.get_all(site_id=site_id) if site_id else []):
+            if device["device_type"] != "UNKNOWN" or device["is_manual"]:
+                continue
+            examined += 1
+            vendor = device["vendor"] or ""
+            if device["mac"] and vendor in ("", "Desconocido"):
+                refreshed = lookup_vendor(device["mac"])
+                if refreshed != "Desconocido":
+                    vendor = refreshed
+                    device_repo.update_vendor(device["id"], vendor)
+            try:
+                evidence = json.loads(device["scan_evidence"] or "{}")
+                ports = [item["port"] for item in json.loads(device["open_ports_list"] or "[]")
+                         if isinstance(item, dict) and "port" in item]
+            except (TypeError, ValueError):
+                evidence, ports = {}, []
+            facts = HostFacts(
+                ip=device["ip"], mac=device["mac"] or "", vendor=vendor,
+                hostname=device["hostname"] or "", open_ports=ports,
+                snmp={"sys_object_id": (evidence or {}).get("snmp_sys_object_id") or "",
+                      "sys_descr": (evidence or {}).get("snmp_sys_descr") or ""})
+            result = identity.identify(facts, offline=True)
+            if result.device_type == "UNKNOWN":
+                continue
+            if device_repo.apply_stored_identity(
+                    device["id"], result.device_type, result.vendor, result.model,
+                    {"classification_source": result.source, "identity_score": result.score,
+                     "identity_confidence": result.confidence,
+                     "identity_sources": result.sources, "identity_evidence": result.evidence,
+                     "reclassified": True}):
+                updated += 1
+                counts[result.device_type] = counts.get(result.device_type, 0) + 1
+        return jsonify({"examined": examined, "updated": updated, "by_type": counts})
+
+    @app.route("/api/devices/stale", methods=["POST"])
+    def api_devices_stale():
+        """Count (default) or delete offline randomized-MAC clients not seen for N days."""
+        payload = request.get_json(silent=True) or {}
+        try:
+            days = int(payload.get("days", 30))
+        except (TypeError, ValueError):
+            return jsonify({"error": "Los días deben ser un número."}), 400
+        if not 1 <= days <= 3650:
+            return jsonify({"error": "Los días deben estar entre 1 y 3650."}), 400
+        site_id = active_site_id()
+        ids = device_repo.find_stale_private_clients(site_id, days) if site_id else []
+        if payload.get("confirm") is True and ids:
+            device_repo.delete_many(ids)
+            return jsonify({"deleted": len(ids), "days": days})
+        return jsonify({"count": len(ids), "days": days})
 
     @app.route("/api/ap-associations/import", methods=["POST"])
     def api_import_ap_associations():

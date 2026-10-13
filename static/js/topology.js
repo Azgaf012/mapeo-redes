@@ -428,6 +428,45 @@ document.addEventListener("DOMContentLoaded", () => {
         link.download = `mapa-${view}.png`;
         link.click();
     });
+    const maintenanceStatus = document.getElementById("maintenance-status");
+    async function postJson(url, body) {
+        const response = await fetch(url, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body || {})
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || "La operación falló.");
+        return result;
+    }
+    document.getElementById("btn-reclassify")?.addEventListener("click", async event => {
+        event.currentTarget.disabled = true;
+        maintenanceStatus.textContent = "Reclasificando...";
+        try {
+            const result = await postJson("/api/identity/reclassify");
+            maintenanceStatus.textContent = `${result.updated} de ${result.examined} equipos sin identificar se reclasificaron con las reglas actuales.`;
+            if (result.updated) await load();
+        } catch (error) {
+            maintenanceStatus.textContent = error.message;
+        } finally {
+            event.currentTarget.disabled = false;
+        }
+    });
+    document.getElementById("btn-purge-stale")?.addEventListener("click", async event => {
+        const days = Number(document.getElementById("stale-days").value);
+        try {
+            const preview = await postJson("/api/devices/stale", { days });
+            if (!preview.count) {
+                maintenanceStatus.textContent = `No hay clientes con MAC aleatoria sin verse hace más de ${days} días.`;
+                return;
+            }
+            if (!window.confirm(`Se eliminarán ${preview.count} equipos desconectados con MAC aleatoria sin verse hace más de ${days} días. Esta acción no se puede deshacer. ¿Continuar?`)) return;
+            const result = await postJson("/api/devices/stale", { days, confirm: true });
+            maintenanceStatus.textContent = `${result.deleted} equipos eliminados.`;
+            await load();
+        } catch (error) {
+            maintenanceStatus.textContent = error.message;
+        }
+    });
     const feedbackForm = document.getElementById("identity-feedback-upload");
     if (feedbackForm) feedbackForm.addEventListener("submit", async event => {
         event.preventDefault();

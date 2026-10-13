@@ -67,6 +67,23 @@ CURATED_OUI = {
     "24:0A:C4": "Espressif IoT", "30:AE:A4": "Espressif IoT", "DC:4F:22": "Espressif IoT"
 }
 
+# Prefixes missing from the bundled netaddr database (checked against the IEEE registry).
+CURATED_OUI.update({
+    "20:58:43": "WNC Corporation", "28:2E:89": "WNC Corporation",
+    "24:B2:B9": "Liteon Technology", "70:08:94": "Liteon Technology",
+    "2C:1B:3A": "Hui Zhou Gaoshengda Technology",
+    "30:C0:AE": "Apple", "48:3A:02": "Fortinet",
+    "50:BB:B5": "AzureWave Technology", "F8:3D:C6": "AzureWave Technology",
+    "54:E4:ED": "Intel Corporate", "F8:CF:52": "Intel Corporate",
+    "54:EA:E1": "Honor Device", "60:D4:AF": "Honor Device", "CC:62:00": "Honor Device",
+    "78:BE:81": "FN-LINK Technology",
+    "7C:FA:80": "JiangSu Fulian Communication Technology",
+    "AC:F2:3C": "Cloud Network Technology", "F4:28:9D": "Cloud Network Technology",
+    "F4:4E:B4": "Cloud Network Technology",
+    "C8:05:A4": "Motorola Mobility",
+})
+
+
 def is_locally_administered_mac(clean_mac):
     """Checks if bit 1 of the first octet is set (Locally Administered / Randomized MAC)."""
     if len(clean_mac) >= 2:

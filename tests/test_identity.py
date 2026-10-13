@@ -130,3 +130,16 @@ def test_failing_driver_does_not_abort_identification(tmp_path):
     service.begin_scan()
     host = HostFacts(ip="10.0.0.2", hostname="NPI1A2B3C")
     assert service.identify(host).device_type == "PRINTER"
+
+
+def test_network_vendor_with_telnet_is_a_low_confidence_switch(tmp_path):
+    service = make_service(tmp_path)
+    service.begin_scan()
+    host = HostFacts(ip="192.168.48.83", mac="D8:94:03:C2:73:91",
+                     vendor="Hewlett Packard Enterprise", open_ports=[23, 80])
+    identity = service.identify(host)
+    assert identity.device_type == "SWITCH"
+    assert identity.confidence == "low"
+    web_only = HostFacts(ip="192.168.48.84", mac="D8:94:03:C2:73:92",
+                         vendor="Hewlett Packard Enterprise", open_ports=[80])
+    assert service.identify(web_only).device_type == "UNKNOWN"

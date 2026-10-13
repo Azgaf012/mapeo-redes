@@ -18,3 +18,9 @@ def test_unknown_or_empty_mac():
     assert lookup_vendor("") == "Desconocido"
     assert lookup_vendor(None) == "Desconocido"
     assert lookup_vendor("AA:22:D7:A1:D8:5B") == "MAC privada/aleatoria"
+
+
+def test_supplemental_oui_prefixes_resolve():
+    from scanner.vendor import lookup_vendor
+    assert lookup_vendor("20:58:43:09:63:7C") == "WNC Corporation"
+    assert lookup_vendor("54:EA:E1:00:00:01") == "Honor Device"

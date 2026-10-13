@@ -81,7 +81,8 @@ VENDOR_ROLES = [
     (("synology", "qnap"), "SERVER", 45, "fabricante de NAS"),
     (("azurewave", "liteon", "hon hai", "foxconn", "fugui", "cloud network technology",
       "mediatek", "ralink", "qualcomm", "murata", "universal global scientific", "askey",
-      "wistron neweb", "compal", "intel corporate", "shenzhen elink"),
+      "wistron neweb", "compal", "intel corporate", "shenzhen elink", "wnc corporation",
+      "fn-link", "azurewave", "liteon"),
      "WIFI_CLIENT", 30, "módulo Wi-Fi/NIC usado en portátiles, PC y dispositivos IoT"),
     (("motorola", "xiaomi", "oppo", "vivo", "oneplus", "realme", "huawei device", "honor",
       "samsung electronics", "spreadtrum", "tecno", "infinix"),
@@ -106,6 +107,13 @@ def vendor_role(vendor):
         if any(_word(keyword, name) for keyword in keywords):
             return device_type, weight, note
     return None
+
+
+def network_vendor_with_telnet(vendor, open_ports):
+    """Managed-switch vendors that expose Telnet (23): a weak but useful switch hint."""
+    name = (vendor or "").lower()
+    return 23 in (open_ports or []) and any(
+        _word(keyword, name) for keyword in ("hewlett packard enterprise", "aruba", "d-link", "cisco"))
 
 
 def vendor_hint(vendor):

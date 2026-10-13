@@ -88,6 +88,20 @@ Los equipos marcados manualmente en la ficha no se modifican.
 `identity_overrides.csv` también se puede editar a mano. Tipos de coincidencia:
 `mac`, `oui`, `ip`, `hostname_prefix`, `sysobjectid_prefix`.
 
+### Mantenimiento del inventario
+
+En **Mapa de red**:
+
+- **Reclasificar sin escanear** vuelve a aplicar las reglas actuales (fabricante, nombre,
+  Telnet, tus overrides) a los equipos `UNKNOWN` ya guardados, sin tocar la red. Los
+  equipos marcados manualmente no se modifican.
+- **Depurar** elimina los equipos desconectados con MAC aleatoria que no se ven hace N
+  días (pide confirmación y muestra cuántos son antes de borrar). Los manuales y los
+  de MAC real se conservan. Un teléfono que reaparece se vuelve a registrar en el
+  siguiente escaneo.
+
+Los fabricantes que la base de OUI no conoce se completan en `scanner/vendor.py`.
+
 ### Plugins
 
 Coloca en `plugins/` (variable `PLUGIN_DIR`):

@@ -16,7 +16,7 @@ from scanner.drivers.base import HostFacts
 from scanner.drivers.hostnames import classify_hostname
 from scanner.drivers.protocols import SharedDiscovery, normalize_mac, run_scan_sweeps
 from scanner.drivers.registry import DriverRegistry
-from scanner.drivers.vendors import vendor_hint, vendor_role
+from scanner.drivers.vendors import network_vendor_with_telnet, vendor_hint, vendor_role
 from scanner.identity.engine import Evidence, MIN_SCORE, resolve
 from scanner.identity.overrides import OverridesStore
 from scanner.identity.unidentified import UnidentifiedLog, manual_entries
@@ -56,7 +56,8 @@ class IdentityService:
         return self.unidentified.write()
 
     # -- per host -----------------------------------------------------------
-    def identify(self, facts, base_model=""):
+    def identify(self, facts, base_model="", offline=False):
+        """Resolve one host. ``offline`` skips drivers and the unidentified report."""
         facts.shared = self.shared
         evidences = []
         weight = BASE_WEIGHTS.get(facts.base_source)
@@ -69,7 +70,11 @@ class IdentityService:
         role = None if facts.private_mac else vendor_role(facts.vendor)
         if role:
             evidences.append(Evidence("oui", role[1], role[0], detail=role[2]))
-        for driver, result in self.registry.run(facts):
+        if not role and not facts.private_mac and network_vendor_with_telnet(
+                facts.vendor, facts.open_ports):
+            evidences.append(Evidence("oui+telnet", 35, "SWITCH",
+                                      detail="fabricante de red con Telnet abierto (baja confianza)"))
+        for driver, result in ([] if offline else self.registry.run(facts)):
             evidences.append(Evidence(
                 driver.name, result.weight, result.device_type, vendor=result.vendor,
                 model=result.model, serial=result.serial, firmware=result.firmware,
@@ -89,7 +94,8 @@ class IdentityService:
         identity = resolve(evidences)
         if identity.device_type == "UNKNOWN" or identity.score < MIN_SCORE:
             identity.device_type = "UNKNOWN"
-            self.unidentified.add(facts, vendor_hint(facts.vendor))
+            if not offline:
+                self.unidentified.add(facts, vendor_hint(facts.vendor))
         return identity
 
     # -- operator feedback --------------------------------------------------

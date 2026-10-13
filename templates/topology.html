@@ -78,6 +78,19 @@
                 </div>
                 <p id="identity-feedback-status" class="small text-muted mb-0" role="status"></p>
             </form>
+            <div id="inventory-maintenance" class="row g-2 mt-2 align-items-end">
+                <div class="col-md-auto">
+                    <button id="btn-reclassify" type="button" class="btn btn-sm btn-outline-primary">Reclasificar sin escanear</button>
+                </div>
+                <div class="col-md-auto">
+                    <label class="form-label small mb-0" for="stale-days">Depurar clientes Wi-Fi sin verse hace (días)</label>
+                    <input id="stale-days" type="number" min="1" max="3650" value="30" class="form-control form-control-sm" style="width: 6rem">
+                </div>
+                <div class="col-md-auto">
+                    <button id="btn-purge-stale" type="button" class="btn btn-sm btn-outline-danger">Depurar</button>
+                </div>
+                <p id="maintenance-status" class="small text-muted mb-0" role="status"></p>
+            </div>
             <div id="topo-group-filter" class="row g-2 mt-1">
                 <div class="col-md-5"><label class="form-label small" for="topo-group-select">Abrir grupo, switch o AP</label>
                     <select id="topo-group-select" class="form-select form-select-sm"><option value="">Resumen completo</option></select></div>

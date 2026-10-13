@@ -98,7 +98,8 @@ class DeviceService:
             "Interfaces SNMP", "Vecinos SNMP", "Título web", "Puerto web",
             "Advertencia SNMP", "Sondeos web (JSON)", "Modelo detectado",
             "SNMP sysObjectID", "Vecinos LLDP (JSON)", "Identidad vecino (JSON)",
-            "AP asociado", "Fuente AP", "Importado AP"
+            "AP asociado", "Fuente AP", "Importado AP",
+            "Confianza identificación", "Fuentes identificación", "Firmware"
         ])
         
         for d in devices:
@@ -166,6 +167,9 @@ class DeviceService:
                 (ap_match[0]["hostname"] or ap_match[0]["ip"]) if ap_match else "",
                 "CSV cliente-AP" if ap_match else "",
                 ap_match[1] if ap_match else "",
+                evidence.get("identity_confidence", ""),
+                ";".join(str(item) for item in evidence.get("identity_sources") or []),
+                evidence.get("identity_firmware", ""),
             ])
             
         output.seek(0)

@@ -76,3 +76,46 @@ def test_feedback_rejects_missing_file_and_keeps_manual_devices(app_env):
                          content_type="multipart/form-data").get_json()
     assert result["updated"] == 0
     assert repo.get_by_ip(site_id, "10.1.1.10")["device_type"] == "SERVER"
+
+
+def test_reclassify_uses_current_rules_without_scanning(app_env):
+    app, path, _ = app_env
+    site_id = _site_id(path)
+    repo = DeviceRepository(path)
+    repo.upsert_discovered(site_id, {
+        "ip": "10.2.0.5", "mac": "50:BB:B5:00:00:01", "vendor": "Desconocido",
+        "device_type": "UNKNOWN"})
+    repo.upsert_discovered(site_id, {
+        "ip": "10.2.0.6", "mac": "02:00:00:00:00:09", "vendor": "MAC privada/aleatoria",
+        "device_type": "UNKNOWN"})
+    result = app.test_client().post("/api/identity/reclassify").get_json()
+    assert result["examined"] == 2 and result["updated"] == 1
+    device = repo.get_by_ip(site_id, "10.2.0.5")
+    assert device["device_type"] == "WIFI_CLIENT"
+    assert device["vendor"] == "AzureWave Technology"
+    assert repo.get_by_ip(site_id, "10.2.0.6")["device_type"] == "UNKNOWN"
+
+
+def test_stale_purge_previews_then_deletes_only_old_offline_random_macs(app_env):
+    app, path, _ = app_env
+    site_id = _site_id(path)
+    repo = DeviceRepository(path)
+    from database.connection import get_db
+    old = repo.upsert_discovered(site_id, {"ip": "10.3.0.1", "mac": "02:11:11:11:11:11",
+                                          "device_type": "UNKNOWN"})
+    real_mac = repo.upsert_discovered(site_id, {"ip": "10.3.0.2", "mac": "50:BB:B5:11:11:11",
+                                               "device_type": "UNKNOWN"})
+    recent = repo.upsert_discovered(site_id, {"ip": "10.3.0.3", "mac": "02:22:22:22:22:22",
+                                             "device_type": "UNKNOWN"})
+    with get_db(path) as conn:
+        conn.execute("UPDATE devices SET status='OFFLINE', last_seen='2026-01-01 00:00:00' WHERE id IN (?,?)",
+                     (old, real_mac))
+        conn.execute("UPDATE devices SET status='OFFLINE' WHERE id=?", (recent,))
+    client = app.test_client()
+    assert client.post("/api/devices/stale", json={"days": 0}).status_code == 400
+    assert client.post("/api/devices/stale", json={"days": 30}).get_json()["count"] == 1
+    assert repo.get_by_ip(site_id, "10.3.0.1") is not None
+    assert client.post("/api/devices/stale", json={"days": 30, "confirm": True}).get_json()["deleted"] == 1
+    assert repo.get_by_ip(site_id, "10.3.0.1") is None
+    assert repo.get_by_ip(site_id, "10.3.0.2") is not None
+    assert repo.get_by_ip(site_id, "10.3.0.3") is not None
