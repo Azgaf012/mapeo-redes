@@ -60,6 +60,24 @@
                     La importación reemplaza la captura anterior; las asociaciones se muestran durante 24 horas.
                 </p>
             </form>
+            <form id="identity-feedback-upload" class="row g-2 mt-2" enctype="multipart/form-data">
+                <div class="col-12">
+                    <span class="small fw-semibold">Equipos sin identificar: <span id="identity-pending" class="badge bg-warning text-dark">0</span></span>
+                    <span class="small text-muted ms-2">Descarga el reporte, completa <code>manual_type</code> (y marca o modelo) y súbelo: se aprende para futuros escaneos.</span>
+                </div>
+                <div class="col-md-auto d-flex align-items-end">
+                    <a href="{{ url_for('export_unidentified') }}" class="btn btn-sm btn-outline-secondary">Descargar reporte</a>
+                </div>
+                <div class="col-md-5">
+                    <label class="form-label small" for="identity-feedback-file">Reporte completado (CSV)</label>
+                    <input id="identity-feedback-file" name="file" type="file" accept=".csv,text/csv"
+                           class="form-control form-control-sm" required>
+                </div>
+                <div class="col-md-auto d-flex align-items-end">
+                    <button type="submit" class="btn btn-sm btn-outline-success">Aplicar clasificaciones</button>
+                </div>
+                <p id="identity-feedback-status" class="small text-muted mb-0" role="status"></p>
+            </form>
             <div id="topo-group-filter" class="row g-2 mt-1">
                 <div class="col-md-5"><label class="form-label small" for="topo-group-select">Abrir grupo, switch o AP</label>
                     <select id="topo-group-select" class="form-select form-select-sm"><option value="">Resumen completo</option></select></div>
@@ -116,6 +134,7 @@
         <span><span class="map-medium-key map-medium-wifi"></span> Wi-Fi identificado</span>
         <span><span class="map-medium-key map-medium-wired"></span> Cable observado</span>
         <span><span class="map-medium-key map-medium-unknown"></span> Medio no identificado</span>
+        <span>Halo ámbar: identificación de baja confianza · halo gris: sin identificar. Clic en un tipo de la leyenda para ocultarlo.</span>
         <span>Un equipo aislado permanece visible porque su conexión no está confirmada.</span>
     </div>
 </div>

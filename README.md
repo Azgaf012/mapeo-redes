@@ -56,6 +56,58 @@ En switches y otros equipos que respondan SNMP, la lectura ahora prioriza el mod
 
 Referencias: [Aruba Instant REST](https://www.arubanetworks.com/techdocs/Aruba-Instant-8.x-Books/8111/Aruba-Instant-8.11.1.0-REST-API-Guide.pdf), [ArubaOS 8 REST](https://developer.arubanetworks.com/aos8/docs/getting-started-aos8-restapi), [Aruba 2530 LLDP](https://www.arubanetworks.com/techdocs/AOS-Switch/16.10/Aruba%202530%20Management%20and%20Configuration%20Guide%20for%20ArubaOS-Switch%2016.10.pdf), [SNMP sysObjectID](https://datatracker.ietf.org/doc/html/rfc3418) y [ENTITY-MIB](https://datatracker.ietf.org/doc/rfc4133/).
 
+## Identificación de equipos: drivers, plugins y retroalimentación
+
+Cada equipo se identifica combinando **evidencias con peso** (fingerprint, `sysObjectID`,
+nombre de host, categoría del fabricante, respuestas de protocolos y tus correcciones).
+Gana el tipo con mayor puntaje; el resultado guarda confianza (alta/media/baja) y las
+fuentes, y se ve en el inspector del mapa. Por debajo del umbral el equipo queda
+`UNKNOWN` y se reporta, nunca se adivina.
+
+| Fuente | Qué aporta | Requiere |
+|---|---|---|
+| `sysobjectid` | Fabricante y línea de producto | SNMP |
+| `printer-mib` | Modelo, serie y contadores de impresoras | SNMP |
+| `aruba-instant-snmp` | APs del cluster y tabla de clientes (nombre y SO) | SNMP en el Virtual Controller |
+| `hikvision-sadp`, `ubiquiti-discovery`, `mikrotik-mndp`, `upnp` | Modelo, serie y firmware sin credenciales | Estar en el mismo segmento (broadcast/multicast) |
+| `mdns` | Nombre de iPhone, Mac, Chromecast | Respuesta unicast del equipo |
+
+Las tablas de columnas de Aruba son una suposición validada en ejecución: cada
+volcado crudo queda en `driver_debug/aruba_<ip>.json` para corregirlas con tu firmware.
+
+### Equipos sin identificar
+
+Cada escaneo escribe `unidentified_devices.csv` (junto a la base de datos, o en
+`IDENTITY_DATA_DIR`). También puedes descargarlo desde **Mapa de red → Descargar reporte**.
+Completa `manual_type` (ej. `Impresora`, `Cámara`, `AP`, o el código `PRINTER`) y,
+opcionalmente, `manual_vendor`, `manual_model` y `apply_to_oui` (`si` aplica la regla a
+todo el fabricante). Súbelo en la misma pantalla o déjalo en la carpeta: se guarda en
+`identity_overrides.csv` con máxima prioridad y se aplica a los próximos escaneos.
+Los equipos marcados manualmente en la ficha no se modifican.
+
+`identity_overrides.csv` también se puede editar a mano. Tipos de coincidencia:
+`mac`, `oui`, `ip`, `hostname_prefix`, `sysobjectid_prefix`.
+
+### Plugins
+
+Coloca en `plugins/` (variable `PLUGIN_DIR`):
+
+- **Python** (`mi_driver.py`): define `DRIVERS = [MiDriver()]` o `register(registry)`;
+  hereda de `scanner.drivers.base.Driver` (`matches` sin I/O, `probe` con I/O).
+- **DLL / .so**: carpeta con `plugin.json` y la biblioteca; exporta
+  `int netmap_identify(const char *request_json, char *response_json, int size)`.
+  El formato completo está en `scanner/drivers/native.py`. Las credenciales se leen
+  solo de variables de entorno. Una DLL ejecuta código nativo con tus permisos:
+  instala solo plugins de confianza y con la misma arquitectura (32/64 bits) que Python.
+
+Un plugin que falla se registra en el log y no interrumpe el escaneo.
+
+### Variables
+
+`IDENTITY_ENABLED`, `IDENTITY_DATA_DIR`, `PLUGIN_DIR`, `IDENTITY_BROADCAST`
+(barridos SSDP/SADP/Ubiquiti/MNDP), `IDENTITY_MDNS`, `IDENTITY_SWEEP_SECONDS`.
+Los barridos de difusión solo alcanzan el segmento donde corre la aplicación.
+
 ## Pruebas
 
 ```powershell

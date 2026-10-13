@@ -17,3 +17,12 @@ class Config:
     DEFAULT_SNMP_TIMEOUT = 1.0
     MAX_SCAN_HOSTS = int(os.environ.get("MAX_SCAN_HOSTS", "16384"))
     SCAN_HOST_WORKERS = int(os.environ.get("SCAN_HOST_WORKERS", "12"))
+
+    # Device identification: drivers, plugins, overrides and the "unidentified" log.
+    # IDENTITY_DATA_DIR defaults to the folder that holds the SQLite database.
+    IDENTITY_ENABLED = os.environ.get("IDENTITY_ENABLED", "true").lower() in ("true", "1", "yes")
+    IDENTITY_DATA_DIR = os.environ.get("IDENTITY_DATA_DIR", "")
+    PLUGIN_DIR = os.environ.get("PLUGIN_DIR", str(BASE_DIR / "plugins"))
+    IDENTITY_BROADCAST = os.environ.get("IDENTITY_BROADCAST", "true").lower() in ("true", "1", "yes")
+    IDENTITY_MDNS = os.environ.get("IDENTITY_MDNS", "true").lower() in ("true", "1", "yes")
+    IDENTITY_SWEEP_SECONDS = float(os.environ.get("IDENTITY_SWEEP_SECONDS", "3"))

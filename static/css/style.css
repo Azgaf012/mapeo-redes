@@ -111,6 +111,7 @@ body {
 .badge-SMART_TV { background-color: #6366f1; color: #fff; }
 .badge-PC, .badge-LAPTOP { background-color: #475569; color: #fff; }
 .badge-PHONE { background-color: #0d9488; color: #fff; }
+.badge-WIFI_CLIENT { background-color: #64748b; color: #fff; }
 .badge-PRINTER { background-color: #0891b2; color: #fff; }
 .badge-CAMERA, .badge-NVR { background-color: #d97706; color: #fff; }
 .badge-CONTROLLER { background-color: #4f46e5; color: #fff; }

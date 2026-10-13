@@ -51,3 +51,10 @@ htmlcov/
 *.swp
 *.swo
 .tools/
+
+# Generated device-identification data (contains real MACs/IPs)
+identity_overrides.csv
+unidentified_devices.csv
+driver_debug/
+plugins/**/*.dll
+inventario_red_*.csv

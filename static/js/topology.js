@@ -7,6 +7,7 @@ const MAP_DEVICE_TYPES = {
     PC: { label: "Computador", color: "#1d4ed8", shape: '<rect x="3" y="4" width="18" height="13" rx="1"/><path d="M9 21h6m-3-4v4"/>' },
     LAPTOP: { label: "Portátil", color: "#1d4ed8", shape: '<rect x="5" y="4" width="14" height="12" rx="1"/><path d="m3 20 2-4h14l2 4z"/>' },
     PHONE: { label: "Teléfono", color: "#7c3aed", shape: '<rect x="7" y="2" width="10" height="20" rx="2"/><path d="M11 18h2"/>' },
+    WIFI_CLIENT: { label: "Cliente Wi-Fi", color: "#64748b", shape: '<path d="M5 12a10 10 0 0 1 14 0M8.5 15.5a5 5 0 0 1 7 0"/><circle cx="12" cy="19" r="1"/>' },
     PRINTER: { label: "Impresora", color: "#475569", shape: '<path d="M6 9V3h12v6M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><path d="M6 15h12v7H6zM18 12h.01"/>' },
     CAMERA: { label: "Cámara", color: "#be185d", shape: '<rect x="3" y="5" width="15" height="13" rx="2"/><circle cx="10.5" cy="11.5" r="3"/><path d="m18 9 4-2v9l-4-2M8 21h5"/>' },
     SMART_TV: { label: "TV / multimedia", color: "#0369a1", shape: '<rect x="2" y="5" width="20" height="14" rx="2"/><path d="M9 22h6m-3-3v3M9 2l3 3 3-3"/>' },
@@ -51,6 +52,7 @@ document.addEventListener("DOMContentLoaded", () => {
     let lastData = null;
     let expandedGroup = null;
     let groupPage = 0;
+    const hiddenTypes = new Set();
 
     function setOptions(select, values, label, getValue, getLabel) {
         const selected = select.value;
@@ -120,6 +122,13 @@ document.addEventListener("DOMContentLoaded", () => {
                 addDetail("Alcance de la asociación", data.ap_association.evidence);
             }
         }
+        if (data.kind === "device") {
+            addDetail("Confianza de identificación", {
+                high: "Alta", medium: "Media", low: "Baja", none: "Sin identificar"
+            }[data.identity_confidence] || "");
+            addDetail("Fuentes de identificación", data.identity_sources);
+            addDetail("Firmware", data.identity_firmware);
+        }
         addDetail("Evidencia", data.evidence);
         addDetail("Subred / gateway", data.gateway);
         addDetail("VLAN", data.vlans);
@@ -155,6 +164,22 @@ document.addEventListener("DOMContentLoaded", () => {
             const info = mapDeviceInfo(type);
             const item = document.createElement("span");
             item.className = "map-legend-item";
+            item.setAttribute("role", "button");
+            item.tabIndex = 0;
+            item.title = "Clic para ocultar o mostrar este tipo en el mapa";
+            item.setAttribute("aria-pressed", String(!hiddenTypes.has(type)));
+            item.style.cursor = "pointer";
+            item.style.opacity = hiddenTypes.has(type) ? "0.45" : "1";
+            const toggle = () => {
+                if (hiddenTypes.has(type)) hiddenTypes.delete(type); else hiddenTypes.add(type);
+                item.setAttribute("aria-pressed", String(!hiddenTypes.has(type)));
+                item.style.opacity = hiddenTypes.has(type) ? "0.45" : "1";
+                applyTypeFilter();
+            };
+            item.addEventListener("click", toggle);
+            item.addEventListener("keydown", event => {
+                if (event.key === "Enter" || event.key === " ") { event.preventDefault(); toggle(); }
+            });
             const badge = document.createElement("span");
             badge.className = "map-legend-icon";
             badge.style.backgroundColor = info.color;
@@ -168,6 +193,17 @@ document.addEventListener("DOMContentLoaded", () => {
             legend.appendChild(item);
         }
         if (!legend.childElementCount) legend.textContent = "Los tipos de equipos aparecerán después del escaneo.";
+    }
+
+    function applyTypeFilter() {
+        if (!graph) return;
+        graph.batch(() => {
+            graph.nodes().forEach(node => {
+                const data = node.data();
+                const hidden = data.kind === "device" && hiddenTypes.has(data.device_type);
+                node.style("display", hidden ? "none" : "element");
+            });
+        });
     }
 
     function render(data) {
@@ -248,6 +284,11 @@ document.addEventListener("DOMContentLoaded", () => {
                 { selector: 'node[kind = "map_group"][parent_type = "ap"]', style: {
                     "background-color": "#dcfce7", "border-color": "#047857", "color": "#065f46"
                 } },
+                { selector: 'node[kind = "device"][identity_confidence = "low"]',
+                  style: { "underlay-color": "#f59e0b", "underlay-opacity": 0.35, "underlay-padding": 7 } },
+                { selector: 'node[kind = "device"][identity_confidence = "none"]',
+                  style: { "underlay-color": "#94a3b8", "underlay-opacity": 0.35, "underlay-padding": 7,
+                           "background-color": "#94a3b8" } },
                 { selector: 'node[status = "OFFLINE"]', style: { "background-color": "#a4acba", "opacity": 0.65 } },
                 { selector: 'node[kind = "device"][connection_medium = "WIFI"]',
                   style: { "border-color": "#0284c7", "border-style": "dashed", "border-width": 4 } },
@@ -255,9 +296,13 @@ document.addEventListener("DOMContentLoaded", () => {
                   style: { "border-color": "#15803d", "border-style": "solid", "border-width": 4 } },
                 { selector: "edge", style: {
                     "width": 2, "line-color": "#7c91ac", "curve-style": "bezier",
-                    "target-arrow-shape": "triangle", "target-arrow-color": "#7c91ac",
+                    "target-arrow-shape": "none", "target-arrow-color": "#7c91ac",
                     "arrow-scale": 0.7
                 }},
+                { selector: 'edge[discovery_method = "GATEWAY_CONFIG"], edge[discovery_method = "NETWORK_GATEWAY"]',
+                  style: { "target-arrow-shape": "triangle" } },
+                { selector: 'edge[discovery_method = "LLDP"], edge[discovery_method = "CDP"]',
+                  style: { "line-color": "#15803d", "width": 3 } },
                 { selector: 'edge[discovery_method = "MANUAL"]',
                   style: { "line-color": "#8b5cf6", "target-arrow-color": "#8b5cf6", "line-style": "dashed" } },
                 { selector: 'edge[discovery_method = "GATEWAY_CONFIG"]',
@@ -277,8 +322,20 @@ document.addEventListener("DOMContentLoaded", () => {
                     ? { name: "grid", padding: 80, spacingFactor: 1.4 }
                     : { name: "cose", padding: 80, animate: false, nodeRepulsion: 14000,
                         idealEdgeLength: 130, componentSpacing: 140, nodeOverlap: 30, numIter: 350 }
-                : { name: "breadthfirst", directed: true, padding: 42, spacingFactor: 1.3 }
+                : visibleNodeCount > 60
+                    ? { name: "concentric", padding: 60, animate: false, minNodeSpacing: 26,
+                        spacingFactor: 1.15,
+                        concentric: node => ["network", "gateway"].includes(node.data("kind")) ? 100
+                            : node.data("kind") === "vlan" ? 80
+                            : ["ROUTER", "FIREWALL", "SWITCH", "ACCESS_POINT"].includes(node.data("device_type")) ? 60
+                            : 10,
+                        levelWidth: () => 1 }
+                    : { name: "breadthfirst", directed: true, padding: 42, spacingFactor: 1.3 }
         });
+        applyTypeFilter();
+        const pending = (data.counts || {}).UNKNOWN || 0;
+        const pendingLabel = document.getElementById("identity-pending");
+        if (pendingLabel) pendingLabel.textContent = pending;
         graph.on("tap", "node", event => {
             const node = event.target.data();
             if (node.kind === "map_group") {
@@ -370,6 +427,27 @@ document.addEventListener("DOMContentLoaded", () => {
         link.href = graph.png({ full: true, bg: "#ffffff", scale: 2 });
         link.download = `mapa-${view}.png`;
         link.click();
+    });
+    const feedbackForm = document.getElementById("identity-feedback-upload");
+    if (feedbackForm) feedbackForm.addEventListener("submit", async event => {
+        event.preventDefault();
+        const message = document.getElementById("identity-feedback-status");
+        const button = feedbackForm.querySelector('button[type="submit"]');
+        button.disabled = true;
+        message.textContent = "Aplicando clasificaciones...";
+        try {
+            const response = await fetch("/api/identity/feedback", {
+                method: "POST", body: new FormData(feedbackForm)
+            });
+            const result = await response.json();
+            if (!response.ok) throw new Error(result.error || "No se pudo importar el CSV.");
+            message.textContent = `${result.imported} clasificaciones guardadas · ${result.updated} equipos actualizados ahora. Se aplicarán también en los próximos escaneos.`;
+            if (result.updated) await load();
+        } catch (error) {
+            message.textContent = error.message;
+        } finally {
+            button.disabled = false;
+        }
     });
     document.getElementById("ap-association-upload").addEventListener("submit", async event => {
         event.preventDefault();

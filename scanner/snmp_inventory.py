@@ -242,3 +242,90 @@ async def _collect(ip, credentials):
 
 def collect_snmp_inventory(ip, credentials):
     return asyncio.run(_collect(ip, credentials))
+
+
+# ---------------------------------------------------------------------------
+# Generic helpers for vendor drivers (scanner/drivers). They return raw pysnmp
+# values so each driver decides how to decode proprietary tables.
+# ---------------------------------------------------------------------------
+
+def _make_auth(credentials):
+    from pysnmp.hlapi.v3arch.asyncio import (
+        CommunityData, UsmUserData, USM_AUTH_HMAC192_SHA256, USM_AUTH_HMAC96_SHA,
+        USM_PRIV_CFB128_AES,
+    )
+
+    if credentials.get("version") == "3":
+        protocol = (USM_AUTH_HMAC96_SHA if credentials.get("auth_protocol") == "SHA1"
+                    else USM_AUTH_HMAC192_SHA256)
+        return UsmUserData(credentials["username"],
+                           authKey=credentials.get("auth_key") or None,
+                           privKey=credentials.get("priv_key") or None,
+                           authProtocol=protocol, privProtocol=USM_PRIV_CFB128_AES)
+    return CommunityData(credentials.get("community") or "public", mpModel=1)
+
+
+async def _walk_columns(ip, credentials, columns, max_rows, timeout):
+    from pysnmp.hlapi.v3arch.asyncio import (
+        ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget,
+        bulk_walk_cmd,
+    )
+
+    auth = _make_auth(credentials)
+    target = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=1)
+    tables = {}
+    with SnmpEngine() as engine:
+        for key, oid in columns.items():
+            values = {}
+            async for error, status, _, bindings in bulk_walk_cmd(
+                    engine, auth, target, ContextData(), 0, 20,
+                    ObjectType(ObjectIdentity(oid)), lookupMib=False,
+                    lexicographicMode=False, maxRows=max_rows):
+                if error or status:
+                    break
+                for binding in bindings:
+                    name = _text(binding[0])
+                    if name.startswith(oid + "."):
+                        values[name[len(oid) + 1:]] = binding[1]
+            tables[key] = values
+    return tables
+
+
+def walk_snmp_columns(ip, credentials, columns, max_rows=2048, timeout=1.5):
+    """Walk several columns; returns ``{key: {oid_suffix: pysnmp_value}}``."""
+    return asyncio.run(_walk_columns(ip, credentials, columns, max_rows, timeout))
+
+
+async def _get_values(ip, credentials, oids, timeout):
+    from pysnmp.hlapi.v3arch.asyncio import (
+        ContextData, ObjectIdentity, ObjectType, SnmpEngine, UdpTransportTarget, get_cmd,
+    )
+
+    auth = _make_auth(credentials)
+    target = await UdpTransportTarget.create((ip, 161), timeout=timeout, retries=0)
+    result = {}
+    with SnmpEngine() as engine:
+        for oid in oids:
+            error, status, _, bindings = await get_cmd(
+                engine, auth, target, ContextData(),
+                ObjectType(ObjectIdentity(oid)), lookupMib=False)
+            if error or status or not bindings:
+                continue
+            value = bindings[0][1]
+            text = _text(value)
+            if text and "NoSuch" not in value.__class__.__name__:
+                result[oid] = value
+    return result
+
+
+def get_snmp_values(ip, credentials, oids, timeout=1.0):
+    """Read scalar OIDs; unavailable objects are omitted from the result."""
+    return asyncio.run(_get_values(ip, credentials, list(oids), timeout))
+
+
+def snmp_text(value):
+    return _text(value)
+
+
+def snmp_mac(value):
+    return _mac(value)

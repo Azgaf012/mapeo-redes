@@ -1,6 +1,7 @@
 """Build distinct physical, logical and inventory maps for one installation."""
 
 import ipaddress
+import json
 import re
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -173,10 +174,24 @@ class TopologyService:
         for device in devices:
             medium, medium_evidence = medium_by_id.get(device["id"], ("UNKNOWN", "Sin evidencia del medio de conexión."))
             medium_label = {"WIFI": "Wi-Fi", "WIRED": "Cable"}.get(medium)
+            try:
+                scan_evidence = json.loads(device.get("scan_evidence") or "{}")
+            except (TypeError, ValueError):
+                scan_evidence = {}
+            if not isinstance(scan_evidence, dict):
+                scan_evidence = {}
+            display_name = device["hostname"] or ""
+            label = display_name if display_name and display_name != device["ip"] \
+                else ""
+            label = f"{label}\n({device['ip']})" if label else device["ip"]
             elements.append({"group": "nodes", "data": {
                 "id": str(device["id"]), "kind": "device",
-                "label": f"{device['hostname'] or device['ip']}\n({device['ip']})"
-                         + (f"\n{medium_label}" if medium_label else ""),
+                "label": label + (f"\n{medium_label}" if medium_label else ""),
+                "identity_confidence": scan_evidence.get("identity_confidence")
+                or ("none" if device["device_type"] == "UNKNOWN" else ""),
+                "identity_sources": scan_evidence.get("identity_sources") or [],
+                "identity_firmware": scan_evidence.get("identity_firmware") or "",
+                "classification_source": scan_evidence.get("classification_source") or "",
                 "name": device["hostname"] or device["ip"], "ip": device["ip"],
                 "network_cidr": device.get("network_cidr"),
                 "switch_association": switch_associations.get(device["id"]),

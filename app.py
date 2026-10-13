@@ -1,4 +1,5 @@
 import ipaddress
+import os
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash, Response
 from config import Config
 from database.connection import init_db
@@ -14,6 +15,8 @@ from services.topology_service import TopologyService
 from services.device_service import DeviceService
 from services.ap_association_service import ApAssociationService
 from services.site_service import SiteService
+from scanner.identity import IdentityService
+from scanner.identity.overrides import normalize_type
 from scanner.network import detect_network_config
 
 def create_app(config_class=Config):
@@ -32,6 +35,16 @@ def create_app(config_class=Config):
     detail_repo = NetworkDetailRepository(app.config["DATABASE_PATH"])
     ap_association_repo = ApAssociationRepository(app.config["DATABASE_PATH"])
 
+    identity_service = None
+    if app.config.get("IDENTITY_ENABLED", Config.IDENTITY_ENABLED):
+        identity_service = IdentityService(
+            app.config.get("IDENTITY_DATA_DIR") or Config.IDENTITY_DATA_DIR
+            or os.path.dirname(os.path.abspath(app.config["DATABASE_PATH"])),
+            plugin_dir=app.config.get("PLUGIN_DIR", Config.PLUGIN_DIR),
+            mdns=app.config.get("IDENTITY_MDNS", Config.IDENTITY_MDNS),
+            broadcast=app.config.get("IDENTITY_BROADCAST", Config.IDENTITY_BROADCAST),
+            sweep_seconds=app.config.get("IDENTITY_SWEEP_SECONDS", Config.IDENTITY_SWEEP_SECONDS))
+
     # Instantiate services
     discovery_service = DiscoveryService(
         device_repo=device_repo,
@@ -40,6 +53,7 @@ def create_app(config_class=Config):
         scan_job_repo=scan_job_repo,
         site_repo=site_repo,
         detail_repo=detail_repo,
+        identity_service=identity_service,
         max_hosts=app.config.get("MAX_SCAN_HOSTS", Config.MAX_SCAN_HOSTS),
         host_workers=app.config.get("SCAN_HOST_WORKERS", Config.SCAN_HOST_WORKERS)
     )
@@ -316,6 +330,42 @@ def create_app(config_class=Config):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify(data)
+
+    @app.route("/identity/unidentified.csv")
+    def export_unidentified():
+        identity = discovery_service.identity
+        content = identity.unidentified.template() if identity else ""
+        return Response(
+            "\ufeff" + content, mimetype="text/csv",
+            headers={"Content-Disposition": "attachment; filename=equipos_sin_identificar.csv"})
+
+    @app.route("/api/identity/feedback", methods=["POST"])
+    def api_identity_feedback():
+        identity = discovery_service.identity
+        if not identity:
+            return jsonify({"error": "La identificación avanzada está desactivada."}), 404
+        upload = request.files.get("file")
+        if not upload:
+            return jsonify({"error": "Selecciona el CSV con tus clasificaciones."}), 400
+        content = upload.read(2_000_001)
+        if len(content) > 2_000_000:
+            return jsonify({"error": "El CSV supera el límite de 2 MB."}), 400
+        try:
+            result = identity.import_feedback(content)
+        except (UnicodeDecodeError, ValueError) as exc:
+            return jsonify({"error": f"CSV no válido: {exc}"}), 400
+        updated = 0
+        site_id = active_site_id()
+        for device in (device_repo.get_all(site_id=site_id) if site_id else []):
+            if device["device_type"] != "UNKNOWN" or device["is_manual"]:
+                continue
+            row = identity.override_for(device["ip"], device["mac"] or "", device["hostname"] or "")
+            device_type = normalize_type(row.get("device_type")) if row else None
+            if device_type and device_repo.apply_override_identity(
+                    device["id"], device_type, row.get("vendor", ""), row.get("model", ""),
+                    {"match_type": row.get("match_type"), "match_value": row.get("match_value")}):
+                updated += 1
+        return jsonify({**result, "updated": updated})
 
     @app.route("/api/ap-associations/import", methods=["POST"])
     def api_import_ap_associations():

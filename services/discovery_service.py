@@ -12,6 +12,8 @@ from repositories.ap_association_repository import ApAssociationRepository
 from services.ap_association_service import ApAssociationService
 from scanner.arp import get_arp_table
 from scanner.classifier import classify_device, classify_lldp_neighbor
+from scanner.drivers.base import HostFacts
+from scanner.drivers.hostnames import classify_hostname
 from scanner.enricher import (detect_os_info, evaluate_security_status,
                               format_open_ports_summary, query_netbios_details)
 from scanner.fingerprint import fingerprint_device
@@ -36,7 +38,8 @@ def scan_size(cidr, max_hosts=Config.MAX_SCAN_HOSTS):
 
 class DiscoveryService:
     def __init__(self, device_repo, network_repo, connection_repo, scan_job_repo,
-                 site_repo, detail_repo=None, max_hosts=None, host_workers=None):
+                 site_repo, detail_repo=None, max_hosts=None, host_workers=None,
+                 identity_service=None):
         self.device_repo = device_repo
         self.network_repo = network_repo
         self.connection_repo = connection_repo
@@ -47,6 +50,7 @@ class DiscoveryService:
             device_repo, ApAssociationRepository(device_repo.db_path)) if device_repo else None)
         self.max_hosts = max_hosts or Config.MAX_SCAN_HOSTS
         self.host_workers = host_workers or Config.SCAN_HOST_WORKERS
+        self.identity = identity_service  # built by create_app; None disables it
 
     def start_scan_async(self, site_id, custom_cidr=None, custom_gateway=None,
                          snmp_community="public", clean_previous_subnets=False,
@@ -114,6 +118,30 @@ class DiscoveryService:
                 classification_source = "classifier"
         hostname = fp_host or hostname
         detected_model = snmp.get("model") or fp_model or (snmp.get("sys_descr") or "")[:80]
+        serial_number = snmp.get("serial_number") or ""
+        identity_evidence = {}
+        if self.identity:
+            facts = HostFacts(
+                ip=ip, mac=mac, vendor=vendor, hostname=hostname, open_ports=open_ports,
+                ttl=ping.get("ttl"), snmp=snmp, web=web_evidence, base_type=device_type,
+                base_source=classification_source, is_gateway=ip == gateway,
+                credentials=credentials)
+            identity = self.identity.identify(facts, detected_model)
+            if identity.device_type != "UNKNOWN":
+                if identity.device_type != device_type:
+                    classification_source = identity.source
+                device_type = identity.device_type
+                if identity.model and (not detected_model or identity.model_weight >= 80):
+                    detected_model = identity.model
+                if identity.vendor and (vendor in ("", "Desconocido") or identity.vendor_weight >= 85):
+                    vendor = identity.vendor
+            serial_number = serial_number or identity.serial
+            hostname = hostname or identity.hostname
+            identity_evidence = {
+                "identity_score": identity.score, "identity_confidence": identity.confidence,
+                "identity_sources": identity.sources, "identity_evidence": identity.evidence,
+                "identity_firmware": identity.firmware,
+            }
         evidence = {
             "detected_type": device_type,
             "detected_model": detected_model,
@@ -130,12 +158,13 @@ class DiscoveryService:
             "snmp_neighbor_count": len(snmp.get("neighbors") or []),
             "snmp_neighbors": (snmp.get("neighbors") or [])[:256],
             "snmp_warning": warning or "",
+            **identity_evidence,
             **web_evidence,
         }
         payload = {
             "network_id": network_id, "ip": ip, "mac": mac, "hostname": hostname,
             "vendor": vendor, "model": detected_model,
-            "serial_number": snmp.get("serial_number") or "",
+            "serial_number": serial_number,
             "uptime_seconds": snmp.get("uptime_seconds"),
             "device_type": device_type, "latency_ms": ping.get("latency_ms"),
             "os_info": detect_os_info(ping.get("ttl", 0), open_ports, vendor,
@@ -164,6 +193,26 @@ class DiscoveryService:
             device_type, neighbor = observations[0]
             self.device_repo.apply_observed_identity(device_id, device_type, neighbor)
 
+    def _apply_controller_data(self, site_id):
+        """Use what a wireless controller published about its APs and clients."""
+        for peer in self.identity.peers:
+            device = self.device_repo.get_by_ip(site_id, peer.get("ip") or "")
+            if device:
+                self.device_repo.confirm_access_point(device["id"], "aruba_instant")
+        clients = self.identity.clients_by_mac()
+        if not clients:
+            return
+        for device in self.device_repo.get_all(site_id=site_id):
+            mac = "".join(char for char in (device.get("mac") or "").upper() if char.isalnum())
+            client = clients.get(mac)
+            if not client or device["device_type"] != "UNKNOWN":
+                continue
+            hint = (classify_hostname(client.get("name") or "")
+                    or classify_hostname(client.get("os") or ""))
+            self.device_repo.apply_client_identity(
+                device["id"], hint[0] if hint else "WIFI_CLIENT",
+                client.get("name") or "", client.get("os") or "")
+
     def _run_scan_pipeline(self, job_id, site_id, cidr, gateway, local_ip,
                            local_mac, credentials):
         try:
@@ -184,6 +233,9 @@ class DiscoveryService:
             self.device_repo.mark_offline_or_cleanup(site_id, alive, cidr=cidr)
             arp_table = get_arp_table()
             ips = sorted(alive, key=ipaddress.IPv4Address)
+            if self.identity:
+                self.scan_job_repo.update_progress(job_id, 44, "Descubriendo fabricantes...")
+                self.identity.begin_scan(local_ip)
             self.scan_job_repo.update_progress(
                 job_id, 45, f"Analizando {len(ips)} equipos...", len(ips))
 
@@ -214,6 +266,9 @@ class DiscoveryService:
                             len(ips))
 
             self.scan_job_repo.update_progress(job_id, 90, "Resolviendo vecinos y puertos...")
+            if self.identity:
+                self._apply_controller_data(site_id)
+                self.identity.finish_scan()
             self.ap_association_service.refresh_recent_aps(site_id)
             devices = self.device_repo.get_all(site_id=site_id)
             active_devices = [device for device in devices if device["status"] == "ONLINE"]

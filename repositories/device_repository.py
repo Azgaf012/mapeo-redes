@@ -94,6 +94,55 @@ class DeviceRepository:
             """, (device_type, hostname, model, json.dumps(evidence, ensure_ascii=False), device_id))
             return True
 
+    def apply_client_identity(self, device_id, device_type, name, os_name):
+        """Name an unknown wireless client from the controller's client table."""
+        with get_db(self.db_path) as conn:
+            device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if not device or device["is_manual"] or device["device_type"] != "UNKNOWN":
+                return False
+            try:
+                evidence = json.loads(device["scan_evidence"] or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                evidence = {}
+            evidence.update({"detected_type": device_type, "classification_source": "controller_client",
+                             "controller_client": {"name": name, "os": os_name}})
+            hostname = device["hostname"] or ""
+            if hostname in ("", "Celular / Móvil", "Smartphone (MAC Privada)"):
+                hostname = name[:120]
+            os_info = os_name[:80] or device["os_info"] or ""
+            conn.execute("""
+                UPDATE devices SET device_type=?, hostname=?, os_info=?, scan_evidence=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+            """, (device_type, hostname, os_info, json.dumps(evidence, ensure_ascii=False), device_id))
+            return True
+
+    def apply_override_identity(self, device_id, device_type, vendor, model, detail):
+        """Apply an identity override to a device the scan left unidentified."""
+        with get_db(self.db_path) as conn:
+            device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
+            if not device or device["is_manual"] or device["device_type"] != "UNKNOWN":
+                return False
+            try:
+                evidence = json.loads(device["scan_evidence"] or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                evidence = {}
+            evidence.update({"detected_type": device_type, "classification_source": "override",
+                             "identity_confidence": "high", "identity_sources": ["override"],
+                             "override": detail})
+            conn.execute("""
+                UPDATE devices SET device_type=?, vendor=CASE WHEN ?<>'' THEN ? ELSE vendor END,
+                    model=CASE WHEN ?<>'' THEN ? ELSE model END, scan_evidence=?,
+                    updated_at=CURRENT_TIMESTAMP
+                WHERE id=?
+            """, (device_type, vendor, vendor, model, model,
+                  json.dumps(evidence, ensure_ascii=False), device_id))
+            return True
+
     def confirm_access_point(self, device_id, source):
         """An explicit AP export can identify an unknown AP without changing manual entries."""
         with get_db(self.db_path) as conn:
