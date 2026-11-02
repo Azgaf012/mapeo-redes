@@ -7,7 +7,7 @@
         <div>
             <p class="text-uppercase text-muted small fw-bold mb-1">Sede local / Exploración</p>
             <h2 class="fw-bold mb-1">Mapa de red</h2>
-            <p class="text-muted mb-0">Explora conexiones observadas, redes lógicas y equipos sin enlace confirmado. Haz clic en un grupo para abrir sus equipos.</p>
+            <p class="text-muted mb-0">Explora la infraestructura y equipos fijos hasta los AP, con resumen de clientes conectados en cada Switch o AP.</p>
         </div>
         <div class="d-flex gap-2">
             <a href="{{ url_for('devices') }}" class="btn btn-outline-primary">Abrir inventario</a>
@@ -92,8 +92,8 @@
                 <p id="maintenance-status" class="small text-muted mb-0" role="status"></p>
             </div>
             <div id="topo-group-filter" class="row g-2 mt-1">
-                <div class="col-md-5"><label class="form-label small" for="topo-group-select">Abrir grupo, switch o AP</label>
-                    <select id="topo-group-select" class="form-select form-select-sm"><option value="">Resumen completo</option></select></div>
+                <div class="col-md-5"><label class="form-label small" for="topo-group-select">Inspeccionar clientes de Switch, AP o subred</label>
+                    <select id="topo-group-select" class="form-select form-select-sm"><option value="">Vista limpia (solo infraestructura y resumen)</option></select></div>
             </div>
         </div>
     </div>

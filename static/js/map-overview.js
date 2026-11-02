@@ -1,8 +1,13 @@
 /* Keep large physical maps readable without claiming an unobserved cable. */
 (function (root) {
     const PAGE_SIZE = 60;
+    const INFRASTRUCTURE_TYPES = new Set([
+        'ROUTER', 'FIREWALL', 'SWITCH', 'ACCESS_POINT', 'CONTROLLER',
+        'SERVER', 'CAMERA', 'NVR', 'PRINTER', 'UPS'
+    ]);
 
-    function buildPhysicalOverview(elements, expandedId = null, requestedPage = 0) {
+    function buildPhysicalOverview(elements, expandedId = null, requestedPage = 0, options = {}) {
+        const showClientGroupNodes = options.showClientGroupNodes !== false;
         const nodes = elements.filter(element => element.group === 'nodes');
         const edges = elements.filter(element => element.group === 'edges');
         const byId = new Map(nodes.map(node => [node.data.id, node]));
@@ -17,9 +22,20 @@
         }
 
         const buckets = new Map();
+        const parentClientCounts = new Map();
+        const addParentClientCount = (parentId, isAssociated) => {
+            if (!parentId) return;
+            if (!parentClientCounts.has(parentId)) {
+                parentClientCounts.set(parentId, { total: 0, associated: 0 });
+            }
+            const entry = parentClientCounts.get(parentId);
+            entry.total++;
+            if (isAssociated) entry.associated++;
+        };
+
         for (const node of nodes) {
             if (node.data.kind !== 'device' ||
-                ['SWITCH', 'ACCESS_POINT', 'ROUTER', 'FIREWALL'].includes(node.data.device_type)) continue;
+                INFRASTRUCTURE_TYPES.has(node.data.device_type)) continue;
             const adjacent = neighbors.get(node.data.id);
             let key;
             let title;
@@ -65,13 +81,30 @@
             if (association) {
                 buckets.get(key).associatedCount++;
             }
+            if (parentId) {
+                addParentClientCount(parentId, Boolean(association));
+            }
         }
 
         const groups = [...buckets.values()].filter(group =>
             group.members.length >= (group.parentId ? 1 : 4));
         groups.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
         const groupedIds = new Set(groups.flatMap(group => group.members.map(node => node.data.id)));
-        const visible = nodes.filter(node => !groupedIds.has(node.data.id));
+        const visible = nodes.filter(node => !groupedIds.has(node.data.id)).map(node => {
+            const counts = parentClientCounts.get(node.data.id);
+            if (!counts) return node;
+            const suffix = `\n[${counts.total} cliente${counts.total === 1 ? '' : 's'}]`;
+            const baseLabel = node.data.label || node.data.name || node.data.ip || node.data.id;
+            return {
+                ...node,
+                data: {
+                    ...node.data,
+                    client_count: counts.total,
+                    associated_client_count: counts.associated,
+                    label: baseLabel.includes('cliente') ? baseLabel : `${baseLabel}${suffix}`
+                }
+            };
+        });
         const visibleIds = new Set(visible.map(node => node.data.id));
         let activeGroup = null;
 
@@ -93,9 +126,12 @@
                 }
                 continue;
             }
+            if (!showClientGroupNodes) {
+                continue;
+            }
             const id = `map-group:${group.id}`;
             visible.push({ group: 'nodes', data: { id, kind: 'map_group',
-                label: `${group.parentId ? 'Equipos de' : 'Sin enlace confirmado'}\n${group.title}\n${group.count} equipos${group.associatedCount ? ` · ${group.associatedCount} asociados` : ''}`,
+                label: `${group.parentId ? 'Clientes en' : 'Sin enlace confirmado'}\n${group.title}\n${group.count} equipo${group.count === 1 ? '' : 's'}${group.associatedCount ? ` · ${group.associatedCount} asociados` : ''}`,
                 name: group.title, count: group.count, group_id: group.id,
                 parent_id: group.parentId, parent_type: group.parentType,
                 associated_count: group.associatedCount } });
@@ -113,7 +149,7 @@
                 ({ id, title, count, pages, parentId, parentType, associatedCount })), activeGroup };
     }
 
-    const api = { buildPhysicalOverview };
+    const api = { buildPhysicalOverview, INFRASTRUCTURE_TYPES };
     if (typeof module !== 'undefined' && module.exports) module.exports = api;
     else root.MapOverview = api;
 })(typeof window === 'undefined' ? globalThis : window);

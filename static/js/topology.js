@@ -105,6 +105,9 @@ document.addEventListener("DOMContentLoaded", () => {
         addDetail("Modelo", data.model);
         addDetail("Estado", data.status);
         if (data.kind === "device") {
+            if (data.client_count) {
+                addDetail("Clientes conectados (resumen)", `${data.client_count}${data.associated_client_count ? ` (${data.associated_client_count} asociados por MAC/CSV)` : ""}`);
+            }
             addDetail("Medio", { WIFI: "Wi-Fi", WIRED: "Cable", UNKNOWN: "No identificado" }[data.connection_medium] || "No identificado");
             addDetail("Evidencia del medio", data.medium_evidence);
             if (data.switch_association) {
@@ -210,13 +213,13 @@ document.addEventListener("DOMContentLoaded", () => {
         if (graph) graph.destroy();
         const deviceCount = data.elements.filter(element => element.data.kind === "device").length;
         const overview = view === "physical"
-            ? MapOverview.buildPhysicalOverview(data.elements, expandedGroup, groupPage)
+            ? MapOverview.buildPhysicalOverview(data.elements, expandedGroup, groupPage, { showClientGroupNodes: false })
             : { elements: data.elements, groups: [], activeGroup: null };
         const active = overview.activeGroup;
         document.getElementById("topo-group-filter").classList.toggle("d-none", view !== "physical");
-        groupSelect.replaceChildren(new Option("Resumen completo", ""));
+        groupSelect.replaceChildren(new Option("Vista limpia (solo infraestructura y resumen)", ""));
         overview.groups.forEach(group => groupSelect.add(new Option(
-            `${group.parentType === "ap" ? "AP" : group.parentType === "switch" ? "Switch" : "Subred"}: ${group.title} (${group.count})`, group.id)));
+            `${group.parentType === "ap" ? "AP" : group.parentType === "switch" ? "Switch" : "Subred"}: ${group.title} (${group.count} clientes)`, group.id)));
         groupSelect.value = active ? active.id : "";
         const pageLabel = document.getElementById("map-group-page");
         const back = document.getElementById("btn-group-back");
@@ -256,18 +259,28 @@ document.addEventListener("DOMContentLoaded", () => {
         document.getElementById("gateway-legend").classList.toggle("d-none", view !== "logical");
         renderUnresolved(data.unresolved_neighbors || []);
         renderDeviceLegend(data.counts);
+        const hasInfraLinks = overview.elements.some(element => element.group === "edges" && element.data.discovery_method !== "MAP_SUMMARY");
+        const infraRoots = overview.elements
+            .filter(element => element.group === "nodes" && ["ROUTER", "FIREWALL"].includes(element.data.device_type))
+            .map(element => `#${CSS.escape(element.data.id)}`)
+            .join(", ");
         graph = cytoscape({
             container: canvas,
             elements,
             style: [
                 { selector: "node", style: {
                     "background-color": "data(icon_color)", "background-image": "data(icon)",
-                    "background-fit": "contain", "background-width": "62%", "background-height": "62%",
-                    "background-repeat": "no-repeat", "label": "data(label)", "color": "#172033",
-                    "font-size": 11, "text-wrap": "wrap", "text-max-width": 115,
-                    "min-zoomed-font-size": 9,
-                    "text-valign": "bottom", "text-margin-y": 8, "width": 48, "height": 48,
-                    "border-width": 2, "border-color": "#ffffff"
+                    "background-fit": "contain", "background-width": "60%", "background-height": "60%",
+                    "background-repeat": "no-repeat", "label": "data(label)", "color": "#0f172a",
+                    "font-size": 11, "font-weight": "600", "text-wrap": "wrap", "text-max-width": 135,
+                    "text-background-color": "#ffffff", "text-background-opacity": 0.9,
+                    "text-background-padding": 3, "text-background-shape": "roundrectangle",
+                    "min-zoomed-font-size": 8,
+                    "text-valign": "bottom", "text-margin-y": 8, "width": 52, "height": 52,
+                    "border-width": 3, "border-color": "#ffffff"
+                }},
+                { selector: 'node[client_count > 0]', style: {
+                    "border-width": 4, "border-color": "#0f766e", "width": 56, "height": 56
                 }},
                 { selector: 'node[kind = "network"], node[kind = "vlan"], node[kind = "type"], node[kind = "gateway"]',
                   style: { "color": "#122c4f", "width": 56, "height": 56, "font-weight": "bold" } },
@@ -302,7 +315,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 { selector: 'edge[discovery_method = "GATEWAY_CONFIG"], edge[discovery_method = "NETWORK_GATEWAY"]',
                   style: { "target-arrow-shape": "triangle" } },
                 { selector: 'edge[discovery_method = "LLDP"], edge[discovery_method = "CDP"]',
-                  style: { "line-color": "#15803d", "width": 3 } },
+                  style: { "line-color": "#15803d", "width": 3, "label": "data(evidence)", "font-size": 9, "color": "#065f46", "text-background-color": "#ffffff", "text-background-opacity": 0.85, "text-background-padding": 2, "text-rotation": "autorotate" } },
                 { selector: 'edge[discovery_method = "MANUAL"]',
                   style: { "line-color": "#8b5cf6", "target-arrow-color": "#8b5cf6", "line-style": "dashed" } },
                 { selector: 'edge[discovery_method = "GATEWAY_CONFIG"]',
@@ -320,8 +333,11 @@ document.addEventListener("DOMContentLoaded", () => {
             layout: view === "physical"
                 ? visibleNodeCount > 220
                     ? { name: "grid", padding: 80, spacingFactor: 1.4 }
-                    : { name: "cose", padding: 80, animate: false, nodeRepulsion: 14000,
-                        idealEdgeLength: 130, componentSpacing: 140, nodeOverlap: 30, numIter: 350 }
+                    : (hasInfraLinks && !active)
+                        ? { name: "breadthfirst", directed: false, roots: infraRoots || undefined,
+                            padding: 60, spacingFactor: 1.45, avoidOverlap: true }
+                        : { name: "cose", padding: 80, animate: false, nodeRepulsion: 16000,
+                            idealEdgeLength: 140, componentSpacing: 150, nodeOverlap: 35, numIter: 350 }
                 : visibleNodeCount > 60
                     ? { name: "concentric", padding: 60, animate: false, minNodeSpacing: 26,
                         spacingFactor: 1.15,

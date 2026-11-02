@@ -3,6 +3,16 @@ import re
 
 AP_MODEL = re.compile(r"\b(?:uap|eap|iap|air-cap|air-ap|ap)(?:[-_][a-z0-9]+|[0-9]+)", re.I)
 
+IDENTIFIED_INFRASTRUCTURE_TYPES = {
+    "ROUTER", "FIREWALL", "SWITCH", "ACCESS_POINT", "CONTROLLER",
+    "SERVER", "CAMERA", "NVR", "PRINTER", "UPS"
+}
+CLIENT_ENDPOINT_TYPES = {"PC", "LAPTOP", "PHONE", "WIFI_CLIENT", "SMART_TV"}
+
+
+def is_client_endpoint_type(device_type):
+    return (device_type or "").upper() in CLIENT_ENDPOINT_TYPES
+
 
 def is_access_point_identity(hostname="", snmp_info=None):
     """Identify an AP from its own name or model, not a shared vendor or port."""

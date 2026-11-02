@@ -11,7 +11,9 @@ from repositories.network_detail_repository import NetworkDetailRepository
 from repositories.ap_association_repository import ApAssociationRepository
 from services.ap_association_service import ApAssociationService
 from scanner.arp import get_arp_table
-from scanner.classifier import classify_device, classify_lldp_neighbor
+from scanner.classifier import (
+    classify_device, classify_lldp_neighbor, is_client_endpoint_type
+)
 from scanner.drivers.base import HostFacts
 from scanner.drivers.hostnames import classify_hostname
 from scanner.enricher import (detect_os_info, evaluate_security_status,
@@ -142,6 +144,12 @@ class DiscoveryService:
                 "identity_sources": identity.sources, "identity_evidence": identity.evidence,
                 "identity_firmware": identity.firmware,
             }
+        # Only identify equipment up to APs and fixed infrastructure; do not promote client endpoints.
+        if is_client_endpoint_type(device_type):
+            device_type = "UNKNOWN"
+            classification_source = "excluded_client_endpoint"
+            if identity_evidence:
+                identity_evidence["identity_confidence"] = "none"
         evidence = {
             "detected_type": device_type,
             "detected_model": detected_model,
@@ -184,7 +192,7 @@ class DiscoveryService:
             if not target or target["ip"] == neighbor.get("source_ip"):
                 continue
             device_type = classify_lldp_neighbor(neighbor)
-            if device_type == "UNKNOWN":
+            if device_type == "UNKNOWN" or is_client_endpoint_type(device_type):
                 continue
             candidates.setdefault(target["id"], []).append((device_type, neighbor))
         for device_id, observations in candidates.items():
@@ -194,24 +202,11 @@ class DiscoveryService:
             self.device_repo.apply_observed_identity(device_id, device_type, neighbor)
 
     def _apply_controller_data(self, site_id):
-        """Use what a wireless controller published about its APs and clients."""
+        """Use what a wireless controller published about its APs."""
         for peer in self.identity.peers:
             device = self.device_repo.get_by_ip(site_id, peer.get("ip") or "")
             if device:
                 self.device_repo.confirm_access_point(device["id"], "aruba_instant")
-        clients = self.identity.clients_by_mac()
-        if not clients:
-            return
-        for device in self.device_repo.get_all(site_id=site_id):
-            mac = "".join(char for char in (device.get("mac") or "").upper() if char.isalnum())
-            client = clients.get(mac)
-            if not client or device["device_type"] != "UNKNOWN":
-                continue
-            hint = (classify_hostname(client.get("name") or "")
-                    or classify_hostname(client.get("os") or ""))
-            self.device_repo.apply_client_identity(
-                device["id"], hint[0] if hint else "WIFI_CLIENT",
-                client.get("name") or "", client.get("os") or "")
 
     def _run_scan_pipeline(self, job_id, site_id, cidr, gateway, local_ip,
                            local_mac, credentials):

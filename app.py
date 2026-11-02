@@ -19,6 +19,7 @@ from services.site_service import SiteService
 from scanner.drivers.base import HostFacts
 from scanner.identity import IdentityService
 from scanner.identity.overrides import normalize_type
+from scanner.classifier import is_client_endpoint_type
 from scanner.network import detect_network_config
 from scanner.vendor import lookup_vendor
 
@@ -401,7 +402,7 @@ def create_app(config_class=Config):
                 snmp={"sys_object_id": (evidence or {}).get("snmp_sys_object_id") or "",
                       "sys_descr": (evidence or {}).get("snmp_sys_descr") or ""})
             result = identity.identify(facts, offline=True)
-            if result.device_type == "UNKNOWN":
+            if result.device_type == "UNKNOWN" or is_client_endpoint_type(result.device_type):
                 continue
             if device_repo.apply_stored_identity(
                     device["id"], result.device_type, result.vendor, result.model,

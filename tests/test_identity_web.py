@@ -86,14 +86,41 @@ def test_reclassify_uses_current_rules_without_scanning(app_env):
         "ip": "10.2.0.5", "mac": "50:BB:B5:00:00:01", "vendor": "Desconocido",
         "device_type": "UNKNOWN"})
     repo.upsert_discovered(site_id, {
-        "ip": "10.2.0.6", "mac": "02:00:00:00:00:09", "vendor": "MAC privada/aleatoria",
+        "ip": "10.2.0.6", "mac": "00:00:48:00:00:09", "vendor": "Desconocido",
         "device_type": "UNKNOWN"})
     result = app.test_client().post("/api/identity/reclassify").get_json()
     assert result["examined"] == 2 and result["updated"] == 1
-    device = repo.get_by_ip(site_id, "10.2.0.5")
-    assert device["device_type"] == "WIFI_CLIENT"
-    assert device["vendor"] == "AzureWave Technology"
-    assert repo.get_by_ip(site_id, "10.2.0.6")["device_type"] == "UNKNOWN"
+    # Client endpoints (WIFI_CLIENT) are not auto-classified; fixed infrastructure (PRINTER) is.
+    assert repo.get_by_ip(site_id, "10.2.0.5")["device_type"] == "UNKNOWN"
+    printer = repo.get_by_ip(site_id, "10.2.0.6")
+    assert printer["device_type"] == "PRINTER"
+    assert printer["vendor"] == "Epson"
+
+
+def test_discovery_identifies_only_up_to_aps_and_fixed_devices(app_env, monkeypatch):
+    from services.discovery_service import DiscoveryService
+
+    _, path, _ = app_env
+    site_id = _site_id(path)
+    devices = DeviceRepository(path)
+
+    monkeypatch.setattr("services.discovery_service.lookup_vendor", lambda mac: "Xiaomi")
+    monkeypatch.setattr("services.discovery_service.query_netbios_details", lambda ip: ("", ""))
+    monkeypatch.setattr("services.discovery_service.scan_host_services", lambda ip: [])
+    monkeypatch.setattr("services.discovery_service.collect_snmp_inventory", lambda ip, credentials: {"has_snmp": False})
+    monkeypatch.setattr("services.discovery_service.socket.gethostbyaddr", lambda ip: ("", [], [ip]))
+    monkeypatch.setattr("services.discovery_service.fingerprint_device",
+                        lambda **kwargs: ("PHONE", "Redmi-Note", "Teléfono Móvil"))
+
+    discovery = DiscoveryService(devices, None, None, None, None, detail_repo=object())
+    payload, _, _, _ = discovery._inspect_host(
+        "10.5.0.10", "", "", "", {"10.5.0.10": "AA:BB:CC:DD:EE:FF"},
+        {"10.5.0.10": {"ttl": 64, "latency_ms": 5.0}},
+        {"version": "2c", "community": "public"}, None,
+    )
+    assert payload["device_type"] == "UNKNOWN"
+    evidence = json.loads(payload["scan_evidence"])
+    assert evidence["classification_source"] == "excluded_client_endpoint"
 
 
 def test_stale_purge_previews_then_deletes_only_old_offline_random_macs(app_env):

@@ -21,6 +21,11 @@ test('switch endpoints form distinct expandable groups with real links preserved
     assert.equal(overview.elements.filter(e => e.group === 'nodes').length, 4);
     const first = overview.groups.find(g => g.id === 'switch:s1');
     assert.equal(first.count, 5);
+    const s1Node = overview.elements.find(e => e.data.id === 's1');
+    assert.equal(s1Node.data.client_count, 5);
+    assert(s1Node.data.label.includes('[5 clientes]'));
+    const cleanOverview = buildPhysicalOverview(elements, null, 0, { showClientGroupNodes: false });
+    assert.equal(cleanOverview.elements.filter(e => e.group === 'nodes').length, 2);
     const expanded = buildPhysicalOverview(elements, 'switch:s1');
     assert(expanded.elements.some(e => e.data.id === 'a0'));
     assert(!expanded.elements.some(e => e.data.id === 'b0'));
@@ -104,7 +109,7 @@ test('large groups page devices and avoid rendering thousands at once', () => {
     assert.equal(overview.activeGroup.count, 3000);
     assert.equal(overview.activeGroup.pages, 50);
     assert.equal(overview.elements.filter(e => e.group === 'nodes').length, 61);
-    assert(overview.elements.some(e => e.data.id === 'n120'));
+    assert(expanded = overview.elements.some(e => e.data.id === 'n120'));
     assert(!overview.elements.some(e => e.data.id === 'n60'));
 });
 
@@ -121,4 +126,35 @@ test('thousands of AP clients remain navigable in pages', () => {
     assert.equal(expanded.activeGroup.pages, 50);
     assert.equal(expanded.elements.filter(item => item.group === 'nodes').length, 61);
     assert(expanded.elements.some(item => item.data.id === 'wifi180'));
+});
+
+test('fixed infrastructure devices remain visible while client endpoints are summarized on parent', () => {
+    const elements = [
+        node('s', 'SWITCH'),
+        node('ap', 'ACCESS_POINT'),
+        node('srv', 'SERVER'),
+        node('cam', 'CAMERA'),
+        node('prn', 'PRINTER'),
+        node('pc1', 'PC'),
+        node('phone1', 'PHONE'),
+        edge('e-ap', 's', 'ap'),
+        edge('e-srv', 's', 'srv'),
+        edge('e-cam', 's', 'cam'),
+        edge('e-prn', 's', 'prn'),
+        edge('e-pc', 's', 'pc1'),
+        edge('e-phone', 'ap', 'phone1'),
+    ];
+    const overview = buildPhysicalOverview(elements, null, 0, { showClientGroupNodes: false });
+    const visibleIds = new Set(overview.elements.filter(e => e.group === 'nodes').map(e => e.data.id));
+    assert(visibleIds.has('s'));
+    assert(visibleIds.has('ap'));
+    assert(visibleIds.has('srv'));
+    assert(visibleIds.has('cam'));
+    assert(visibleIds.has('prn'));
+    assert(!visibleIds.has('pc1'));
+    assert(!visibleIds.has('phone1'));
+    const switchNode = overview.elements.find(e => e.data.id === 's');
+    const apNode = overview.elements.find(e => e.data.id === 'ap');
+    assert.equal(switchNode.data.client_count, 1);
+    assert.equal(apNode.data.client_count, 1);
 });
