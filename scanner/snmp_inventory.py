@@ -36,8 +36,12 @@ OIDS = {
 }
 
 
+from scanner.classifier import decode_snmp_text
+
+
 def _text(value):
-    return value.prettyPrint() if hasattr(value, "prettyPrint") else str(value)
+    raw = value.prettyPrint() if hasattr(value, "prettyPrint") else str(value)
+    return decode_snmp_text(raw)
 
 
 def _number(value):

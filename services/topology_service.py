@@ -125,6 +125,12 @@ class TopologyService:
         if status not in {"ONLINE", "ALL"}:
             raise ValueError("Filtro de estado no válido")
         all_devices = self.device_repo.get_all(site_id=site_id)
+        if any('"snmp_neighbors": [{' in (d.get("scan_evidence") or "") for d in all_devices):
+            from services.discovery_service import DiscoveryService
+            DiscoveryService(
+                self.device_repo, None, None, None, None, detail_repo=self.detail_repo
+            ).reconcile_stored_neighbors(site_id)
+            all_devices = self.device_repo.get_all(site_id=site_id)
         networks = self.network_repo.get_by_site(site_id)
         device_vlans = self.detail_repo.get_device_vlans(site_id)
         target_net = None
@@ -147,9 +153,7 @@ class TopologyService:
             devices.append(device)
 
         ids = {device["id"] for device in devices}
-        switch_associations, ap_associations = (
-            self._mac_associations(site_id, devices) if view == "physical" else ({}, {})
-        )
+        switch_associations, ap_associations = self._mac_associations(site_id, devices)
         physical_links = self.detail_repo.get_links(site_id)
         medium_by_id = {}
         for device_id, association in ap_associations.items():
@@ -184,6 +188,12 @@ class TopologyService:
             label = display_name if display_name and display_name != device["ip"] \
                 else ""
             label = f"{label}\n({device['ip']})" if label else device["ip"]
+            raw_model = (device["model"] or "").strip()
+            serial_num = (device.get("serial_number") or "").strip()
+            if raw_model.isdigit() and serial_num.upper().startswith("DS-"):
+                hk_match = re.match(r"^(DS-[A-Z0-9-]+?-[A-Z0-9/]+?)(?=20[12]\d|1620)", serial_num, re.I)
+                if hk_match:
+                    raw_model = hk_match.group(1)
             elements.append({"group": "nodes", "data": {
                 "id": str(device["id"]), "kind": "device",
                 "label": label + (f"\n{medium_label}" if medium_label else ""),
@@ -197,7 +207,8 @@ class TopologyService:
                 "switch_association": switch_associations.get(device["id"]),
                 "ap_association": ap_associations.get(device["id"]),
                 "mac": device["mac"] or "", "hostname": device["hostname"] or "",
-                "vendor": device["vendor"] or "", "model": device["model"] or "",
+                "vendor": device["vendor"] or "", "model": raw_model,
+                "serial_number": serial_num,
                 "device_type": device["device_type"], "status": device["status"],
                 "last_seen": device["last_seen"], "latency_ms": device["latency_ms"],
                 "uptime_seconds": device.get("uptime_seconds"),

@@ -72,18 +72,20 @@ class NetworkDetailRepository:
                          (site_id, source["id"]))
             conn.execute("DELETE FROM neighbor_observations WHERE site_id=? AND source_device_id=?",
                          (site_id, source["id"]))
+            resolved_ports = set()
+            pending_unresolved = []
             for neighbor in neighbors:
                 target = resolve_neighbor(neighbor, devices)
                 source_port = neighbor.get("source_port")
                 target_port = neighbor.get("remote_port")
                 if not target or target["id"] == source["id"]:
-                    conn.execute("""
-                        INSERT INTO neighbor_observations
-                        (site_id, source_device_id, source_port, neighbor_name, neighbor_port, protocol)
-                        VALUES (?, ?, ?, ?, ?, ?)
-                    """, (site_id, source["id"], source_port, neighbor.get("neighbor_name"),
-                          target_port, neighbor.get("protocol", "LLDP")))
+                    pending_unresolved.append((
+                        site_id, source["id"], source_port, neighbor.get("neighbor_name"),
+                        target_port, neighbor.get("protocol", "LLDP")
+                    ))
                     continue
+                if source_port:
+                    resolved_ports.add(source_port)
                 source_if = conn.execute(
                     "SELECT id FROM interfaces WHERE device_id=? AND name=?",
                     (source["id"], source_port),
@@ -116,6 +118,14 @@ class NetworkDetailRepository:
                     """, (site_id, source["id"], source_if_id, target["id"], target_if_id,
                           neighbor.get("protocol", "LLDP"),
                           f"{source_port or '?'} → {target_port or '?'}"))
+            for row in pending_unresolved:
+                if row[2] and row[2] in resolved_ports:
+                    continue
+                conn.execute("""
+                    INSERT INTO neighbor_observations
+                    (site_id, source_device_id, source_port, neighbor_name, neighbor_port, protocol)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                """, row)
 
     def get_interfaces(self, device_id):
         with get_db(self.db_path) as conn:

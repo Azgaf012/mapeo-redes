@@ -6,12 +6,18 @@ def _normalized(value):
 
 
 def _mac(value):
-    return "".join(char for char in (value or "").upper() if char in "0123456789ABCDEF")
+    text = (value or "").strip()
+    if text.lower().startswith("0x"):
+        text = text[2:]
+    return "".join(char for char in text.upper() if char in "0123456789ABCDEF")
 
 
 def resolve_neighbor(neighbor, devices):
     identifiers = [neighbor.get("target_ip"), neighbor.get("neighbor_name")]
+    name = (neighbor.get("neighbor_name") or "").strip()
     chassis_mac = _mac(neighbor.get("chassis_id"))
+    if len(chassis_mac) != 12 and name.lower().startswith("0x"):
+        chassis_mac = _mac(name)
     matches = []
     for device in devices:
         names = {device.get("ip", "").lower(), _normalized(device.get("hostname"))}

@@ -5,6 +5,10 @@
         'ROUTER', 'FIREWALL', 'SWITCH', 'ACCESS_POINT', 'CONTROLLER',
         'SERVER', 'CAMERA', 'NVR', 'PRINTER', 'UPS'
     ]);
+    const LOGICAL_ONLY_METHODS = new Set([
+        'GATEWAY_CONFIG', 'NETWORK_GATEWAY', 'NETWORK_MEMBERSHIP',
+        'VLAN_MEMBERSHIP', 'INVENTORY_GROUP', 'MAP_SUMMARY'
+    ]);
 
     function buildPhysicalOverview(elements, expandedId = null, requestedPage = 0, options = {}) {
         const showClientGroupNodes = options.showClientGroupNodes !== false;
@@ -13,6 +17,7 @@
         const byId = new Map(nodes.map(node => [node.data.id, node]));
         const neighbors = new Map();
         for (const edge of edges) {
+            if (LOGICAL_ONLY_METHODS.has(edge.data.discovery_method)) continue;
             const { source, target } = edge.data;
             if (!byId.has(source) || !byId.has(target)) continue;
             if (!neighbors.has(source)) neighbors.set(source, new Set());
@@ -23,6 +28,8 @@
 
         const buckets = new Map();
         const parentClientCounts = new Map();
+        const subnetClientCounts = new Map();
+        let totalClientCount = 0;
         const addParentClientCount = (parentId, isAssociated) => {
             if (!parentId) return;
             if (!parentClientCounts.has(parentId)) {
@@ -36,6 +43,9 @@
         for (const node of nodes) {
             if (node.data.kind !== 'device' ||
                 INFRASTRUCTURE_TYPES.has(node.data.device_type)) continue;
+            totalClientCount++;
+            const subnetKey = node.data.network_cidr || 'Sin subred registrada';
+            subnetClientCounts.set(subnetKey, (subnetClientCounts.get(subnetKey) || 0) + 1);
             const adjacent = neighbors.get(node.data.id);
             let key;
             let title;
@@ -70,9 +80,8 @@
                 }
             }
             if (!key && (!adjacent || adjacent.size === 0)) {
-                const subnet = node.data.network_cidr || 'Sin subred registrada';
-                key = `unlinked:${subnet}`;
-                title = subnet;
+                key = `unlinked:${subnetKey}`;
+                title = subnetKey;
             }
             if (!key) continue;
             if (!buckets.has(key)) buckets.set(key, { id: key, title, parentId, parentType,
@@ -86,21 +95,38 @@
             }
         }
 
+        const minUnlinkedSize = showClientGroupNodes ? 4 : 1;
         const groups = [...buckets.values()].filter(group =>
-            group.members.length >= (group.parentId ? 1 : 4));
+            group.members.length >= (group.parentId ? 1 : minUnlinkedSize));
         groups.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
         const groupedIds = new Set(groups.flatMap(group => group.members.map(node => node.data.id)));
-        const visible = nodes.filter(node => !groupedIds.has(node.data.id)).map(node => {
+        const visible = nodes.filter(node => {
+            if (groupedIds.has(node.data.id)) return false;
+            if (!showClientGroupNodes && node.data.kind === 'type' && !INFRASTRUCTURE_TYPES.has(node.data.name)) {
+                return false;
+            }
+            return true;
+        }).map(node => {
             const counts = parentClientCounts.get(node.data.id);
-            if (!counts) return node;
-            const suffix = `\n[${counts.total} cliente${counts.total === 1 ? '' : 's'}]`;
+            const subnetClients = !showClientGroupNodes && (
+                node.data.kind === 'network'
+                    ? (subnetClientCounts.get(node.data.name) || 0)
+                    : ['FIREWALL', 'ROUTER'].includes(node.data.device_type)
+                        ? (subnetClientCounts.get(node.data.network_cidr) || 0)
+                        : 0
+            );
+            if (!counts && !subnetClients) return node;
+            const total = counts ? counts.total : subnetClients;
+            const associated = counts ? counts.associated : 0;
+            const suffix = `\n[${total} cliente${total === 1 ? '' : 's'}${!counts && subnetClients ? ' en subred' : ''}]`;
             const baseLabel = node.data.label || node.data.name || node.data.ip || node.data.id;
             return {
                 ...node,
                 data: {
                     ...node.data,
-                    client_count: counts.total,
-                    associated_client_count: counts.associated,
+                    client_count: total,
+                    associated_client_count: associated,
+                    subnet_client_count: subnetClients || undefined,
                     label: baseLabel.includes('cliente') ? baseLabel : `${baseLabel}${suffix}`
                 }
             };
@@ -146,7 +172,8 @@
         return { elements: [...visible, ...edges.filter(edge =>
             visibleIds.has(edge.data.source) && visibleIds.has(edge.data.target))],
             groups: groups.map(({ id, title, count, pages, parentId, parentType, associatedCount }) =>
-                ({ id, title, count, pages, parentId, parentType, associatedCount })), activeGroup };
+                ({ id, title, count, pages, parentId, parentType, associatedCount })),
+            activeGroup, totalClientCount };
     }
 
     const api = { buildPhysicalOverview, INFRASTRUCTURE_TYPES };

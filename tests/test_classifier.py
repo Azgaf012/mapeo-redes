@@ -272,3 +272,32 @@ def test_fingerprint_local_laptop():
     dev_type, name, model = fingerprint_device("127.0.0.1", is_local=True)
     assert dev_type in ["LAPTOP", "PC"]
     assert len(name) > 0
+
+
+def test_lldp_hex_description_and_model_extraction():
+    from scanner.classifier import classify_lldp_neighbor, decode_snmp_text, extract_lldp_model
+
+    hex_sw = (
+        "0x313932302d3438472d506f452b202833373057292053776974636820536f66747761726520"
+        "56657273696f6e20352e32302e39392c2052656c6561736520313131340d0a436f7079726967"
+        "6874286329323031302d32303136204865776c657474205061636b61726420456e7465727072"
+        "69736520446576656c6f706d656e74204c50"
+    )
+    decoded = decode_snmp_text(hex_sw)
+    assert "1920-48G-PoE+ (370W) Switch" in decoded
+    sw_neighbor = {
+        "neighbor_name": "HPE",
+        "description": hex_sw,
+        "capabilities": ["bridge", "router"],
+    }
+    assert classify_lldp_neighbor(sw_neighbor) == "SWITCH"
+    assert extract_lldp_model(sw_neighbor) == "HPE 1920-48G-PoE+ (370W) Switch"
+
+    ap_neighbor = {
+        "neighbor_name": "LAB_PWR_03",
+        "description": "ArubaOS (MODEL: 207), Version Aruba IAP",
+        "capabilities": ["wlan_access_point"],
+    }
+    assert classify_lldp_neighbor(ap_neighbor) == "ACCESS_POINT"
+    assert extract_lldp_model(ap_neighbor) == "Aruba IAP-207"
+

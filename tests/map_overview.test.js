@@ -158,3 +158,22 @@ test('fixed infrastructure devices remain visible while client endpoints are sum
     assert.equal(switchNode.data.client_count, 1);
     assert.equal(apNode.data.client_count, 1);
 });
+
+test('logical view hides unidentified client nodes and summarizes them on the gateway', () => {
+    const fw = node('fw', 'FIREWALL', '192.168.48.0/22');
+    const sw = node('sw', 'SWITCH', '192.168.48.0/22');
+    const ap = node('ap', 'ACCESS_POINT', '192.168.48.0/22');
+    const clients = Array.from({ length: 180 }, (_, i) => node(`u${i}`, 'UNKNOWN', '192.168.48.0/22'));
+    const gwEdges = [sw, ap, ...clients].map((n, i) => ({
+        group: 'edges',
+        data: { id: `gw-${i}`, source: 'fw', target: n.data.id, discovery_method: 'GATEWAY_CONFIG' }
+    }));
+    const overview = buildPhysicalOverview([fw, sw, ap, ...clients, ...gwEdges], null, 0, { showClientGroupNodes: false });
+    const visibleNodeIds = overview.elements.filter(e => e.group === 'nodes').map(e => e.data.id);
+    assert.deepEqual(visibleNodeIds, ['fw', 'sw', 'ap']);
+    assert.equal(overview.totalClientCount, 180);
+    const fwNode = overview.elements.find(e => e.data.id === 'fw');
+    assert.equal(fwNode.data.subnet_client_count, 180);
+    assert.equal(overview.elements.filter(e => e.group === 'edges').length, 2);
+});
+

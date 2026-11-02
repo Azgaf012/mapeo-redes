@@ -103,6 +103,7 @@ class DiscoveryService:
             warning = f"SNMP {ip}: {exc.__class__.__name__}"
         if snmp.get("sys_name") and not hostname:
             hostname = snmp["sys_name"]
+        observed_hostname = hostname
         ping = ping_details.get(ip, {})
         web_evidence = {}
         device_type, fp_host, fp_model = fingerprint_device(
@@ -148,6 +149,8 @@ class DiscoveryService:
         if is_client_endpoint_type(device_type):
             device_type = "UNKNOWN"
             classification_source = "excluded_client_endpoint"
+            hostname = observed_hostname
+            detected_model = snmp.get("model") or ""
             if identity_evidence:
                 identity_evidence["identity_confidence"] = "none"
         evidence = {
@@ -185,7 +188,7 @@ class DiscoveryService:
         return payload, snmp, neighbors, warning
 
     def _enrich_neighbor_identities(self, site_id, neighbors, devices):
-        """Upgrade unknown devices only when an LLDP/CDP neighbor resolves uniquely."""
+        """Upgrade unknown or matching infrastructure devices when an LLDP/CDP neighbor resolves uniquely."""
         candidates = {}
         for neighbor in neighbors:
             target = resolve_neighbor(neighbor, devices)
@@ -195,11 +198,54 @@ class DiscoveryService:
             if device_type == "UNKNOWN" or is_client_endpoint_type(device_type):
                 continue
             candidates.setdefault(target["id"], []).append((device_type, neighbor))
+        updated = 0
         for device_id, observations in candidates.items():
             if len({device_type for device_type, _ in observations}) != 1:
                 continue
+            observations.sort(key=lambda item: (
+                0 if item[1].get("protocol", "LLDP") == "LLDP" else 1,
+                0 if item[1].get("description") else 1,
+            ))
             device_type, neighbor = observations[0]
-            self.device_repo.apply_observed_identity(device_id, device_type, neighbor)
+            if self.device_repo.apply_observed_identity(device_id, device_type, neighbor):
+                updated += 1
+        return updated
+
+    def reconcile_stored_neighbors(self, site_id):
+        """Re-apply stored SNMP LLDP/CDP neighbor tables to enrich infrastructure identities and links."""
+        devices = self.device_repo.get_all(site_id=site_id)
+        active_devices = [device for device in devices if device["status"] == "ONLINE"]
+        stored_neighbors = []
+        snmp_sources = []
+        for device in active_devices:
+            try:
+                evidence = json.loads(device.get("scan_evidence") or "{}")
+            except (TypeError, ValueError):
+                evidence = {}
+            if not isinstance(evidence, dict):
+                continue
+            raw_neighbors = evidence.get("snmp_neighbors") or []
+            if not raw_neighbors:
+                continue
+            snmp_sources.append(device["ip"])
+            for neighbor in raw_neighbors:
+                if isinstance(neighbor, dict):
+                    stored_neighbors.append(dict(neighbor, source_ip=device["ip"]))
+        if not stored_neighbors:
+            return 0
+        updated = self._enrich_neighbor_identities(site_id, stored_neighbors, active_devices)
+        devices = self.device_repo.get_all(site_id=site_id)
+        by_ip = {device["ip"]: device for device in devices}
+        active_devices = [device for device in devices if device["status"] == "ONLINE"]
+        if self.detail_repo:
+            for source_ip in snmp_sources:
+                if source_ip in by_ip:
+                    self.detail_repo.save_neighbors(
+                        site_id, by_ip[source_ip],
+                        [n for n in stored_neighbors if n.get("source_ip") == source_ip],
+                        active_devices,
+                    )
+        return updated
 
     def _apply_controller_data(self, site_id):
         """Use what a wireless controller published about its APs."""

@@ -21,6 +21,7 @@ const MAP_DEVICE_TYPES = {
 };
 
 const mapIconCache = new Map();
+const mapBadgeCache = new Map();
 function mapDeviceInfo(type) {
     return Object.prototype.hasOwnProperty.call(MAP_DEVICE_TYPES, type)
         ? MAP_DEVICE_TYPES[type] : MAP_DEVICE_TYPES.UNKNOWN;
@@ -32,6 +33,208 @@ function mapIcon(type) {
         mapIconCache.set(key, `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`);
     }
     return mapIconCache.get(key);
+}
+function mapCardBadge(type) {
+    const key = Object.prototype.hasOwnProperty.call(MAP_DEVICE_TYPES, type) ? type : "UNKNOWN";
+    if (!mapBadgeCache.has(key)) {
+        const color = MAP_DEVICE_TYPES[key].color;
+        const svg = `<?xml version="1.0" encoding="UTF-8"?><svg xmlns="http://www.w3.org/2000/svg" width="38" height="38" viewBox="0 0 38 38"><rect x="1" y="1" width="36" height="36" rx="9" fill="${color}"/><g transform="translate(7,7)" fill="none" stroke="#ffffff" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">${MAP_DEVICE_TYPES[key].shape}</g></svg>`;
+        mapBadgeCache.set(key, `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`);
+    }
+    return mapBadgeCache.get(key);
+}
+
+function ipSortValue(ip) {
+    const parts = String(ip || "").split(".").map(Number);
+    if (parts.length !== 4 || parts.some(n => Number.isNaN(n))) return Number.MAX_SAFE_INTEGER;
+    return (((parts[0] * 256 + parts[1]) * 256 + parts[2]) * 256) + parts[3];
+}
+
+function cleanVendorName(vendor) {
+    const v = String(vendor || "").trim();
+    if (!v || v === "Desconocido" || v.startsWith("MAC privada") || v.startsWith("Dispositivo")) return "";
+    if (/aruba/i.test(v)) return "Aruba";
+    if (/hewlett packard|hpe|procurve/i.test(v)) return "HPE";
+    if (/hikvision/i.test(v)) return "Hikvision";
+    if (/tp-link/i.test(v)) return "TP-Link";
+    if (/fortinet/i.test(v)) return "Fortinet";
+    if (/ricoh/i.test(v)) return "Ricoh";
+    return v.split(/[,(]/)[0].trim().slice(0, 16);
+}
+
+function cleanModelName(model, serial) {
+    let m = String(model || "").trim();
+    const s = String(serial || "").trim();
+    if (/^\d+$/.test(m) && /^DS-/i.test(s)) {
+        const hk = s.match(/^(DS-[A-Z0-9-]+?-[A-Z0-9/]+?)(?=20[12]\d|1620)/i);
+        m = hk ? hk[1] : s.slice(0, 16);
+    }
+    if (!m || m === "0" || /modelo sin confirmar|Cámara IP \(|Impresora \(|Firewall \/ Gateway/i.test(m)) {
+        return "";
+    }
+    return m.slice(0, 22);
+}
+
+function buildCardLabel(data) {
+    if (data.kind === "network") {
+        const extra = data.client_count ? `\n${data.client_count} clientes finales` : (data.gateway ? `\nGW ${data.gateway}` : "");
+        return `Subred\n${data.name || data.label}${extra}`;
+    }
+    if (data.kind === "vlan") {
+        return `${data.name || data.label}`;
+    }
+    if (data.kind === "type") {
+        const info = mapDeviceInfo(data.name);
+        return `Categoría\n${info.label}`;
+    }
+    if (data.kind === "gateway") {
+        return `Gateway\n${data.ip || data.gateway || ""}`;
+    }
+    if (data.kind === "map_group") {
+        return data.label || data.name || "";
+    }
+    const info = mapDeviceInfo(data.device_type);
+    const vendor = cleanVendorName(data.vendor);
+    const model = cleanModelName(data.model, data.serial_number);
+    let rawHost = String(data.hostname || "").trim();
+    if (rawHost && data.ip && rawHost.endsWith(" " + data.ip)) {
+        rawHost = rawHost.slice(0, -(data.ip.length + 1)).trim();
+    }
+    if (/^HIKVISION\s+/i.test(rawHost)) {
+        rawHost = rawHost.replace(/^HIKVISION\s+/i, "").split(" - ")[0].trim();
+    }
+    let title = (rawHost && rawHost !== data.ip) ? rawHost : "";
+    if (!title) {
+        if (model) title = model;
+        else if (vendor) title = `${info.label} ${vendor}`;
+        else title = info.label;
+    }
+    if (title.length > 21) title = title.slice(0, 20) + "…";
+
+    const ipLine = data.ip || "";
+    const metaParts = [];
+    if (data.uplink_port) {
+        metaParts.push(`Pto ${data.uplink_port}`);
+    }
+    if (data.client_count > 0) {
+        metaParts.push(`${data.client_count} cliente${data.client_count === 1 ? "" : "s"}${data.subnet_client_count ? " en red" : ""}`);
+    } else if (model && model !== title) {
+        metaParts.push(model);
+    } else if (vendor && !title.toLowerCase().includes(vendor.toLowerCase())) {
+        metaParts.push(vendor);
+    }
+    const metaLine = metaParts.join(" · ").slice(0, 25);
+    return [title, ipLine, metaLine].filter(Boolean).join("\n");
+}
+
+function formatEdgeLabel(edgeData) {
+    const srcPort = String(edgeData.source_port || "").trim();
+    const dstPort = String(edgeData.target_port || "").trim();
+    const cleanDst = (!dstPort || dstPort === "?" || /^0x[0-9a-f]{10,}$/i.test(dstPort) || dstPort === "bond0")
+        ? "" : dstPort.replace(/^GigabitEthernet/i, "Gi").replace(/\s+Interface$/i, "");
+    if (srcPort && cleanDst) return `Pto ${srcPort} → ${cleanDst}`;
+    if (srcPort) return `Pto ${srcPort}`;
+    return edgeData.evidence || "";
+}
+
+function buildArchitecturalPositions(elements, activeGroup) {
+    const nodes = elements.filter(el => el.group === "nodes");
+    const edges = elements.filter(el => el.group === "edges");
+    const positions = {};
+    const CARD_GAP_X = 212;
+    const ROW_GAP_Y = 98;
+    const TIER_GAP_Y = 136;
+    const MAX_COLS = 6;
+
+    const placeRows = (list, startY, cols = MAX_COLS) => {
+        if (!list.length) return startY;
+        const totalRows = Math.ceil(list.length / cols);
+        for (let r = 0; r < totalRows; r++) {
+            const slice = list.slice(r * cols, (r + 1) * cols);
+            const rowWidth = (slice.length - 1) * CARD_GAP_X;
+            const y = startY + r * ROW_GAP_Y;
+            slice.forEach((node, idx) => {
+                positions[node.data.id] = {
+                    x: Math.round(-rowWidth / 2 + idx * CARD_GAP_X),
+                    y: Math.round(y)
+                };
+            });
+        }
+        return startY + (totalRows - 1) * ROW_GAP_Y + TIER_GAP_Y;
+    };
+
+    if (activeGroup) {
+        const memberSet = new Set(activeGroup.visibleMemberIds || []);
+        const parentNodes = nodes.filter(n => n.data.id === activeGroup.parentId);
+        const members = nodes.filter(n => memberSet.has(n.data.id));
+        const others = nodes.filter(n => n.data.id !== activeGroup.parentId && !memberSet.has(n.data.id));
+        let y = 0;
+        if (parentNodes.length) y = placeRows(parentNodes, y, 4);
+        if (members.length) y = placeRows(members, y, MAX_COLS);
+        if (others.length) placeRows(others, y, MAX_COLS);
+        return positions;
+    }
+
+    const physicalDegree = new Map();
+    const linkedApIds = new Set();
+    const byId = new Map(nodes.map(n => [n.data.id, n]));
+    for (const edge of edges) {
+        if (!["LLDP", "CDP", "MANUAL"].includes(edge.data.discovery_method)) continue;
+        const { source, target } = edge.data;
+        physicalDegree.set(source, (physicalDegree.get(source) || 0) + 1);
+        physicalDegree.set(target, (physicalDegree.get(target) || 0) + 1);
+        const sNode = byId.get(source);
+        const tNode = byId.get(target);
+        if (sNode?.data.device_type === "ACCESS_POINT") linkedApIds.add(source);
+        if (tNode?.data.device_type === "ACCESS_POINT") linkedApIds.add(target);
+    }
+
+    const sortByPortThenIp = (a, b) => {
+        const pA = Number.parseInt(a.data.uplink_port || "", 10);
+        const pB = Number.parseInt(b.data.uplink_port || "", 10);
+        if (!Number.isNaN(pA) && !Number.isNaN(pB) && pA !== pB) return pA - pB;
+        return ipSortValue(a.data.ip) - ipSortValue(b.data.ip);
+    };
+
+    const tier0NetVlan = nodes.filter(n => ["network", "vlan", "type"].includes(n.data.kind));
+    const tier1Core = nodes.filter(n =>
+        n.data.kind === "gateway" ||
+        (n.data.kind === "device" && ["FIREWALL", "ROUTER"].includes(n.data.device_type))
+    ).sort((a, b) => ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
+
+    const tier2Switches = nodes.filter(n =>
+        n.data.kind === "device" && ["SWITCH", "CONTROLLER"].includes(n.data.device_type)
+    ).sort((a, b) => (physicalDegree.get(b.data.id) || 0) - (physicalDegree.get(a.data.id) || 0) || ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
+
+    const tier3LinkedAps = nodes.filter(n =>
+        n.data.kind === "device" && n.data.device_type === "ACCESS_POINT" && linkedApIds.has(n.data.id)
+    ).sort(sortByPortThenIp);
+
+    const tier4OtherAps = nodes.filter(n =>
+        n.data.kind === "device" && n.data.device_type === "ACCESS_POINT" && !linkedApIds.has(n.data.id)
+    ).sort(sortByPortThenIp);
+
+    const tier5Services = nodes.filter(n =>
+        n.data.kind === "device" && ["SERVER", "NVR", "PRINTER", "UPS"].includes(n.data.device_type)
+    ).sort((a, b) => ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
+
+    const tier6Cameras = nodes.filter(n =>
+        n.data.kind === "device" && n.data.device_type === "CAMERA"
+    ).sort((a, b) => ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
+
+    const placed = new Set([
+        ...tier0NetVlan, ...tier1Core, ...tier2Switches,
+        ...tier3LinkedAps, ...tier4OtherAps, ...tier5Services, ...tier6Cameras
+    ].map(n => n.data.id));
+    const tier7Rest = nodes.filter(n => !placed.has(n.data.id));
+
+    let currentY = 0;
+    for (const tier of [tier0NetVlan, tier1Core, tier2Switches, tier3LinkedAps, tier4OtherAps, tier5Services, tier6Cameras, tier7Rest]) {
+        if (tier.length) {
+            currentY = placeRows(tier, currentY, MAX_COLS);
+        }
+    }
+    return positions;
 }
 
 document.addEventListener("DOMContentLoaded", () => {
@@ -212,11 +415,11 @@ document.addEventListener("DOMContentLoaded", () => {
     function render(data) {
         if (graph) graph.destroy();
         const deviceCount = data.elements.filter(element => element.data.kind === "device").length;
-        const overview = view === "physical"
-            ? MapOverview.buildPhysicalOverview(data.elements, expandedGroup, groupPage, { showClientGroupNodes: false })
-            : { elements: data.elements, groups: [], activeGroup: null };
+        const overview = MapOverview.buildPhysicalOverview(
+            data.elements, expandedGroup, groupPage, { showClientGroupNodes: false }
+        );
         const active = overview.activeGroup;
-        document.getElementById("topo-group-filter").classList.toggle("d-none", view !== "physical");
+        document.getElementById("topo-group-filter").classList.remove("d-none");
         groupSelect.replaceChildren(new Option("Vista limpia (solo infraestructura y resumen)", ""));
         overview.groups.forEach(group => groupSelect.add(new Option(
             `${group.parentType === "ap" ? "AP" : group.parentType === "switch" ? "Switch" : "Subred"}: ${group.title} (${group.count} clientes)`, group.id)));
@@ -234,119 +437,204 @@ document.addEventListener("DOMContentLoaded", () => {
             previous.disabled = active.page === 0;
             next.disabled = active.page === active.pages - 1;
         }
-        const visibleNodeCount = overview.elements.filter(element => element.group === "nodes").length;
-        const elements = overview.elements.map(element => {
-            if (element.group !== "nodes") return element;
+
+        const uplinkPorts = new Map();
+        const nodeById = new Map(
+            overview.elements.filter(el => el.group === "nodes").map(el => [el.data.id, el])
+        );
+        for (const el of overview.elements) {
+            if (el.group !== "edges" || !["LLDP", "CDP"].includes(el.data.discovery_method)) continue;
+            const srcNode = nodeById.get(el.data.source);
+            const dstNode = nodeById.get(el.data.target);
+            if (srcNode?.data.device_type === "SWITCH" && el.data.source_port) {
+                uplinkPorts.set(el.data.target, el.data.source_port);
+            } else if (dstNode?.data.device_type === "SWITCH" && el.data.target_port) {
+                uplinkPorts.set(el.data.source, el.data.target_port);
+            }
+        }
+
+        const hasSwitchInView = [...nodeById.values()].some(
+            el => el.data.kind === "device" && el.data.device_type === "SWITCH"
+        );
+        const filteredRawElements = overview.elements.filter(el => {
+            if (el.group !== "edges") return true;
+            if (view === "logical" && !active && el.data.discovery_method === "GATEWAY_CONFIG" && hasSwitchInView) {
+                const targetNode = nodeById.get(el.data.target);
+                const tType = targetNode?.data.device_type;
+                return ["SWITCH", "CONTROLLER", "ROUTER", "FIREWALL", "SERVER", "NVR", "PRINTER", "UPS"].includes(tType);
+            }
+            return true;
+        });
+
+        const elements = filteredRawElements.map(element => {
+            if (element.group === "edges") {
+                return {
+                    ...element,
+                    data: {
+                        ...element.data,
+                        edge_label: formatEdgeLabel(element.data)
+                    }
+                };
+            }
             const type = element.data.kind === "device" ? element.data.device_type
                 : element.data.kind === "type" ? element.data.name : element.data.kind;
-            return { ...element, data: {
+            const uplinkPort = uplinkPorts.get(element.data.id) || "";
+            const enrichedData = {
                 ...element.data,
+                uplink_port: uplinkPort,
                 icon: mapIcon(type),
+                badge_icon: mapCardBadge(type),
                 icon_color: mapDeviceInfo(type).color
-            }};
+            };
+            enrichedData.card_label = buildCardLabel(enrichedData);
+            return { ...element, data: enrichedData };
         });
+
+        const infraNodeCount = elements.filter(
+            el => el.group === "nodes" && el.data.kind === "device"
+        ).length;
+        const clientSummaryText = overview.totalClientCount
+            ? ` · ${overview.totalClientCount} clientes resumidos`
+            : "";
         document.getElementById("map-empty").classList.toggle("d-none", deviceCount > 0);
-        const edgeCount = methodName => data.elements.filter(element =>
-            element.group === "edges" && element.data.discovery_method === methodName).length;
         document.getElementById("map-summary").textContent = view === "logical"
-            ? `${deviceCount} equipos · ${edgeCount("GATEWAY_CONFIG")} relaciones con gateway`
+            ? `${infraNodeCount} equipos en diagrama${clientSummaryText}`
             : view === "inventory"
-                ? `${deviceCount} equipos · ${data.elements.filter(element => element.data.kind === "type").length} tipos`
-                : `${deviceCount} equipos · ${data.elements.filter(element => element.group === "edges").length} enlaces · ${overview.groups.length} grupos`;
+                ? `${infraNodeCount} equipos en diagrama · ${elements.filter(element => element.data.kind === "type").length} categorías${clientSummaryText}`
+                : `${infraNodeCount} equipos en diagrama · ${elements.filter(element => element.group === "edges").length} enlaces físicos${clientSummaryText}`;
         document.getElementById("map-view-label").textContent = {
-            physical: "Conexiones físicas", logical: "Subred → gateway → equipos", inventory: "Equipos por tipo"
+            physical: "Arquitectura física", logical: "Arquitectura lógica", inventory: "Inventario por capa"
         }[view];
         document.getElementById("gateway-legend").classList.toggle("d-none", view !== "logical");
         renderUnresolved(data.unresolved_neighbors || []);
         renderDeviceLegend(data.counts);
-        const hasInfraLinks = overview.elements.some(element => element.group === "edges" && element.data.discovery_method !== "MAP_SUMMARY");
-        const infraRoots = overview.elements
-            .filter(element => element.group === "nodes" && ["ROUTER", "FIREWALL"].includes(element.data.device_type))
-            .map(element => `#${CSS.escape(element.data.id)}`)
-            .join(", ");
+
+        const positions = buildArchitecturalPositions(elements, active);
         graph = cytoscape({
             container: canvas,
             elements,
             style: [
                 { selector: "node", style: {
-                    "background-color": "data(icon_color)", "background-image": "data(icon)",
-                    "background-fit": "contain", "background-width": "60%", "background-height": "60%",
-                    "background-repeat": "no-repeat", "label": "data(label)", "color": "#0f172a",
-                    "font-size": 11, "font-weight": "600", "text-wrap": "wrap", "text-max-width": 135,
-                    "text-background-color": "#ffffff", "text-background-opacity": 0.9,
-                    "text-background-padding": 3, "text-background-shape": "roundrectangle",
-                    "min-zoomed-font-size": 8,
-                    "text-valign": "bottom", "text-margin-y": 8, "width": 52, "height": 52,
-                    "border-width": 3, "border-color": "#ffffff"
+                    "shape": "round-rectangle",
+                    "width": 182,
+                    "height": 68,
+                    "background-color": "#ffffff",
+                    "background-image": "data(badge_icon)",
+                    "background-fit": "none",
+                    "background-width": 36,
+                    "background-height": 36,
+                    "background-position-x": "10px",
+                    "background-position-y": "50%",
+                    "background-repeat": "no-repeat",
+                    "border-width": 2.5,
+                    "border-color": "data(icon_color)",
+                    "label": "data(card_label)",
+                    "color": "#0f172a",
+                    "font-size": 10.5,
+                    "font-weight": "600",
+                    "text-wrap": "wrap",
+                    "text-max-width": 124,
+                    "text-valign": "center",
+                    "text-halign": "center",
+                    "text-margin-x": 20,
+                    "text-margin-y": 0,
+                    "text-background-opacity": 0,
+                    "min-zoomed-font-size": 6,
+                    "z-index": 10
+                }},
+                { selector: 'node[device_type = "FIREWALL"], node[device_type = "ROUTER"], node[device_type = "SWITCH"]', style: {
+                    "width": 194,
+                    "height": 74,
+                    "border-width": 3,
+                    "background-color": "#f8fafc",
+                    "font-size": 11
                 }},
                 { selector: 'node[client_count > 0]', style: {
-                    "border-width": 4, "border-color": "#0f766e", "width": 56, "height": 56
+                    "border-width": 3,
+                    "underlay-color": "#0f766e",
+                    "underlay-opacity": 0.12,
+                    "underlay-padding": 4
                 }},
                 { selector: 'node[kind = "network"], node[kind = "vlan"], node[kind = "type"], node[kind = "gateway"]',
-                  style: { "color": "#122c4f", "width": 56, "height": 56, "font-weight": "bold" } },
-                { selector: 'node[kind = "type"], node[kind = "gateway"]', style: { "shape": "round-rectangle" } },
-                { selector: 'node[kind = "network"]', style: { "shape": "hexagon" } },
+                  style: {
+                      "background-color": "#f1f5f9",
+                      "color": "#0f172a",
+                      "width": 186,
+                      "height": 66,
+                      "font-weight": "bold",
+                      "border-width": 2.5
+                  } },
                 { selector: 'node[kind = "gateway"]', style: { "border-color": "#b45309", "border-style": "dashed" } },
                 { selector: 'node[kind = "map_group"]', style: {
-                    "shape": "round-rectangle", "width": 150, "height": 82,
+                    "shape": "round-rectangle", "width": 184, "height": 74,
                     "background-color": "#e0f2fe", "background-image": "none",
                     "border-color": "#0284c7", "border-width": 2,
-                    "color": "#0c4a6e", "font-weight": "bold", "text-max-width": 145,
-                    "min-zoomed-font-size": 0, "text-valign": "center", "text-margin-y": 0
+                    "color": "#0c4a6e", "font-weight": "bold", "text-max-width": 165,
+                    "min-zoomed-font-size": 0, "text-valign": "center", "text-margin-x": 0, "text-margin-y": 0
                 } },
                 { selector: 'node[kind = "map_group"][parent_type = "ap"]', style: {
                     "background-color": "#dcfce7", "border-color": "#047857", "color": "#065f46"
                 } },
                 { selector: 'node[kind = "device"][identity_confidence = "low"]',
-                  style: { "underlay-color": "#f59e0b", "underlay-opacity": 0.35, "underlay-padding": 7 } },
+                  style: { "underlay-color": "#f59e0b", "underlay-opacity": 0.22, "underlay-padding": 5 } },
                 { selector: 'node[kind = "device"][identity_confidence = "none"]',
-                  style: { "underlay-color": "#94a3b8", "underlay-opacity": 0.35, "underlay-padding": 7,
-                           "background-color": "#94a3b8" } },
-                { selector: 'node[status = "OFFLINE"]', style: { "background-color": "#a4acba", "opacity": 0.65 } },
+                  style: { "border-color": "#94a3b8", "background-color": "#f8fafc" } },
+                { selector: 'node[status = "OFFLINE"]', style: { "background-color": "#f1f5f9", "opacity": 0.65 } },
                 { selector: 'node[kind = "device"][connection_medium = "WIFI"]',
-                  style: { "border-color": "#0284c7", "border-style": "dashed", "border-width": 4 } },
-                { selector: 'node[kind = "device"][connection_medium = "WIRED"]',
-                  style: { "border-color": "#15803d", "border-style": "solid", "border-width": 4 } },
+                  style: { "border-style": "dashed" } },
+                { selector: 'node:selected', style: {
+                    "border-width": 4,
+                    "underlay-color": "#2563eb",
+                    "underlay-opacity": 0.22,
+                    "underlay-padding": 6
+                }},
                 { selector: "edge", style: {
-                    "width": 2, "line-color": "#7c91ac", "curve-style": "bezier",
-                    "target-arrow-shape": "none", "target-arrow-color": "#7c91ac",
-                    "arrow-scale": 0.7
+                    "width": 2.2,
+                    "line-color": "#94a3b8",
+                    "curve-style": "taxi",
+                    "taxi-direction": "downward",
+                    "taxi-turn": "50%",
+                    "target-arrow-shape": "none",
+                    "target-arrow-color": "#94a3b8",
+                    "arrow-scale": 0.75,
+                    "z-index": 1
                 }},
                 { selector: 'edge[discovery_method = "GATEWAY_CONFIG"], edge[discovery_method = "NETWORK_GATEWAY"]',
                   style: { "target-arrow-shape": "triangle" } },
                 { selector: 'edge[discovery_method = "LLDP"], edge[discovery_method = "CDP"]',
-                  style: { "line-color": "#15803d", "width": 3, "label": "data(evidence)", "font-size": 9, "color": "#065f46", "text-background-color": "#ffffff", "text-background-opacity": 0.85, "text-background-padding": 2, "text-rotation": "autorotate" } },
+                  style: {
+                      "line-color": "#15803d",
+                      "width": 2.8,
+                      "label": "data(edge_label)",
+                      "font-size": 9.5,
+                      "font-weight": "700",
+                      "color": "#065f46",
+                      "text-background-color": "#dcfce7",
+                      "text-background-opacity": 0.95,
+                      "text-background-padding": 3,
+                      "text-background-shape": "roundrectangle",
+                      "text-rotation": "none"
+                  } },
                 { selector: 'edge[discovery_method = "MANUAL"]',
                   style: { "line-color": "#8b5cf6", "target-arrow-color": "#8b5cf6", "line-style": "dashed" } },
                 { selector: 'edge[discovery_method = "GATEWAY_CONFIG"]',
-                  style: { "line-color": "#d97706", "target-arrow-color": "#d97706", "line-style": "dashed", "width": 2 } },
+                  style: { "line-color": "#d97706", "target-arrow-color": "#d97706", "line-style": "dashed", "width": 2, "opacity": 0.75 } },
                 { selector: 'edge[discovery_method = "NETWORK_GATEWAY"]',
-                  style: { "line-color": "#d97706", "target-arrow-color": "#d97706", "width": 2 } },
+                  style: { "line-color": "#d97706", "target-arrow-color": "#d97706", "width": 2.5 } },
                 { selector: 'edge[discovery_method = "NETWORK_MEMBERSHIP"], edge[discovery_method = "VLAN_MEMBERSHIP"], edge[discovery_method = "INVENTORY_GROUP"]',
-                  style: { "line-color": "#cbd5e1", "target-arrow-color": "#cbd5e1", "width": 1 } },
+                  style: { "line-color": "#cbd5e1", "target-arrow-color": "#cbd5e1", "width": 1.5, "opacity": 0.65 } },
                 { selector: 'edge[discovery_method = "MAP_SUMMARY"]',
                   style: { "line-color": "#0284c7", "target-arrow-color": "#0284c7",
                       "line-style": "dotted", "target-arrow-shape": "none", "width": 2 } },
                 { selector: 'edge[discovery_method = "MAP_SUMMARY"][parent_type = "ap"]',
                   style: { "line-color": "#047857" } }
             ],
-            layout: view === "physical"
-                ? visibleNodeCount > 220
-                    ? { name: "grid", padding: 80, spacingFactor: 1.4 }
-                    : (hasInfraLinks && !active)
-                        ? { name: "breadthfirst", directed: false, roots: infraRoots || undefined,
-                            padding: 60, spacingFactor: 1.45, avoidOverlap: true }
-                        : { name: "cose", padding: 80, animate: false, nodeRepulsion: 16000,
-                            idealEdgeLength: 140, componentSpacing: 150, nodeOverlap: 35, numIter: 350 }
-                : visibleNodeCount > 60
-                    ? { name: "concentric", padding: 60, animate: false, minNodeSpacing: 26,
-                        spacingFactor: 1.15,
-                        concentric: node => ["network", "gateway"].includes(node.data("kind")) ? 100
-                            : node.data("kind") === "vlan" ? 80
-                            : ["ROUTER", "FIREWALL", "SWITCH", "ACCESS_POINT"].includes(node.data("device_type")) ? 60
-                            : 10,
-                        levelWidth: () => 1 }
-                    : { name: "breadthfirst", directed: true, padding: 42, spacingFactor: 1.3 }
+            layout: {
+                name: "preset",
+                positions: node => positions[node.id()] || { x: 0, y: 0 },
+                fit: true,
+                padding: 46
+            }
         });
         applyTypeFilter();
         const pending = (data.counts || {}).UNKNOWN || 0;

@@ -14,10 +14,46 @@ def is_client_endpoint_type(device_type):
     return (device_type or "").upper() in CLIENT_ENDPOINT_TYPES
 
 
+def decode_snmp_text(value):
+    """Decode hex-encoded ASCII strings returned by pysnmp when strings contain control chars."""
+    text = (value or "").strip()
+    if text.startswith(("0x", "0X")) and len(text) >= 10 and len(text) % 2 == 0:
+        try:
+            raw = bytes.fromhex(text[2:])
+            if raw and all(32 <= b <= 126 or b in (9, 10, 13) for b in raw):
+                return " ".join(raw.decode("ascii").split())
+        except ValueError:
+            pass
+    return text
+
+
+def extract_lldp_model(neighbor):
+    """Extract a clean hardware model from an LLDP neighbor description when available."""
+    description = decode_snmp_text(neighbor.get("description") or "")
+    if not description:
+        return ""
+    aruba_match = re.search(r"ArubaOS\s*\(MODEL:\s*([A-Za-z0-9-]+)\)", description, re.I)
+    if aruba_match:
+        model_num = aruba_match.group(1).strip()
+        prefix = "Aruba IAP" if "iap" in description.lower() else "Aruba AP"
+        return f"{prefix}-{model_num}"
+    aruba_ap = re.search(r"\b(Aruba\s+(?:Instant\s+)?(?:IAP|AP)[-\s]?[A-Za-z0-9-]+)", description, re.I)
+    if aruba_ap:
+        return " ".join(aruba_ap.group(1).split())
+    sw_match = re.match(r"^([A-Za-z0-9+-]+(?:\s+\([0-9]+W\))?\s+Switch)\b", description, re.I)
+    if sw_match:
+        base = sw_match.group(1).strip()
+        name = (neighbor.get("neighbor_name") or "").strip()
+        if ("hewlett packard" in description.lower() or name.upper() in ("HPE", "HP")) and not base.upper().startswith(("HP", "HPE")):
+            return f"HPE {base}"
+        return base
+    return description[:80]
+
+
 def is_access_point_identity(hostname="", snmp_info=None):
     """Identify an AP from its own name or model, not a shared vendor or port."""
     info = snmp_info if isinstance(snmp_info, dict) else {}
-    description = " ".join(str(info.get(key) or "") for key in ("sys_descr", "model"))
+    description = " ".join(decode_snmp_text(str(info.get(key) or "")) for key in ("sys_descr", "model"))
     names = (hostname or "", info.get("sys_name") or "")
     description_lower = description.lower()
     if "switch" in description_lower or "controller" in description_lower:
@@ -32,11 +68,15 @@ def is_access_point_identity(hostname="", snmp_info=None):
 
 def classify_lldp_neighbor(neighbor):
     """Use a neighbor's advertised identity, not the switch vendor or uplink port."""
-    description = neighbor.get("description") or ""
-    if "wlan_access_point" in (neighbor.get("capabilities") or []) and "controller" not in description.lower():
+    description = decode_snmp_text(neighbor.get("description") or "")
+    capabilities = set(neighbor.get("capabilities") or [])
+    if "wlan_access_point" in capabilities and "controller" not in description.lower():
         return "ACCESS_POINT"
-    return classify_device("", hostname=neighbor.get("neighbor_name") or "",
-                           snmp_info={"sys_descr": description})
+    detected = classify_device("", hostname=neighbor.get("neighbor_name") or "",
+                               snmp_info={"sys_descr": description})
+    if detected == "UNKNOWN" and "bridge" in capabilities and "wlan_access_point" not in capabilities:
+        return "SWITCH"
+    return detected
 
 
 def classify_device(ip, mac="", hostname="", vendor="", open_ports=None, is_gateway=False, snmp_info=None):

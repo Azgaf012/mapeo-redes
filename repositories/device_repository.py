@@ -1,10 +1,58 @@
 import json
 
 from database.connection import get_db
+from scanner.classifier import (
+    CLIENT_ENDPOINT_TYPES, decode_snmp_text, extract_lldp_model
+)
+
+SYNTHETIC_CLIENT_MODELS = {
+    "Smartphone (MAC Privada)",
+    "Aruba AP (modelo sin confirmar)",
+    "Computadora de Escritorio",
+    "Computadora Personal",
+    "Laptop Windows/Mac",
+    "Laptop con Batería",
+    "Laptop",
+    "Dispositivo Apple (iPhone/iPad)",
+    "Dispositivo Apple (iOS/macOS)",
+    "Apple iPhone",
+    "Apple iPad",
+    "Apple MacBook",
+    "Teléfono Samsung Galaxy",
+    "Amazon Media Device",
+    "Android TV / Chromecast",
+    "Google Cast / Android TV",
+    "Smart TV / Media Player",
+    "Smart TV / Streaming",
+    "Roku Player",
+    "Roku Streaming Device",
+    "Samsung Smart TV",
+    "Samsung Tizen TV",
+    "0",
+}
+
+SYNTHETIC_CLIENT_HOSTNAMES = {
+    "Celular / Móvil",
+    "Smartphone (MAC Privada)",
+    "Samsung Galaxy",
+    "Fire TV / Echo",
+    "Smart TV",
+    "Google Cast Device",
+    "Roku TV",
+}
 
 
 def _synthetic_model(model):
-    return model in {"Smartphone (MAC Privada)", "Aruba AP (modelo sin confirmar)"} or model.startswith("Switch (")
+    text = (model or "").strip()
+    return (
+        text in SYNTHETIC_CLIENT_MODELS
+        or text.startswith(("Switch (", "Teléfono Móvil (", "Smart TV ("))
+    )
+
+
+def _synthetic_hostname(hostname):
+    text = (hostname or "").strip()
+    return text in SYNTHETIC_CLIENT_HOSTNAMES or text.startswith("Smartphone ")
 
 
 class DeviceRepository:
@@ -64,10 +112,10 @@ class DeviceRepository:
             return dict(row) if row else None
 
     def apply_observed_identity(self, device_id, device_type, neighbor):
-        """Preserve manual corrections and attach the LLDP evidence to an unknown device."""
+        """Preserve manual corrections and attach LLDP/CDP evidence to unknown or matching infra devices."""
         with get_db(self.db_path) as conn:
             device = conn.execute("SELECT * FROM devices WHERE id=?", (device_id,)).fetchone()
-            if not device or device["is_manual"] or device["device_type"] != "UNKNOWN":
+            if not device or device["is_manual"] or device["device_type"] not in ("UNKNOWN", device_type):
                 return False
             try:
                 evidence = json.loads(device["scan_evidence"] or "{}")
@@ -75,24 +123,88 @@ class DeviceRepository:
                 evidence = {}
             if not isinstance(evidence, dict):
                 evidence = {}
+            source_tag = "lldp" if neighbor.get("protocol", "LLDP") == "LLDP" else "cdp"
             evidence["detected_type"] = device_type
-            evidence["classification_source"] = "lldp" if neighbor.get("protocol", "LLDP") == "LLDP" else "cdp"
+            if device["device_type"] == "UNKNOWN" or not evidence.get("classification_source"):
+                evidence["classification_source"] = source_tag
+            evidence["identity_confidence"] = "high"
+            sources = list(evidence.get("identity_sources") or [])
+            if source_tag not in sources:
+                sources.append(source_tag)
+            evidence["identity_sources"] = sources
+            decoded_neighbor = dict(neighbor)
+            if decoded_neighbor.get("description"):
+                decoded_neighbor["description"] = decode_snmp_text(decoded_neighbor["description"])
             evidence["neighbor_identity"] = {
-                key: neighbor.get(key) for key in ("source_ip", "source_port", "neighbor_name",
-                                                  "description", "chassis_id", "target_ip", "capabilities")
+                key: decoded_neighbor.get(key)
+                for key in ("source_ip", "source_port", "neighbor_name",
+                            "description", "chassis_id", "target_ip", "capabilities")
             }
             previous_name = device["hostname"] or ""
-            hostname = (neighbor.get("neighbor_name") or "").strip()[:120]
-            if previous_name and previous_name not in {"Celular / Móvil", "Smartphone (MAC Privada)"}:
+            raw_neighbor_name = (neighbor.get("neighbor_name") or "").strip()[:120]
+            if raw_neighbor_name.lower().startswith("0x"):
+                raw_neighbor_name = ""
+            hostname = raw_neighbor_name
+            if previous_name and not _synthetic_hostname(previous_name):
                 hostname = previous_name
             previous_model = device["model"] or ""
-            model = "" if _synthetic_model(previous_model) else previous_model
+            lldp_model = extract_lldp_model(decoded_neighbor)
+            if not previous_model or _synthetic_model(previous_model):
+                model = lldp_model
+            else:
+                model = previous_model
+            if model:
+                evidence["detected_model"] = model
             conn.execute("""
                 UPDATE devices SET device_type=?, hostname=?, model=?, scan_evidence=?,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE id=?
             """, (device_type, hostname, model, json.dumps(evidence, ensure_ascii=False), device_id))
             return True
+
+    def demote_client_endpoints(self, site_id=None):
+        """Convert non-manual client endpoint rows to UNKNOWN and strip synthetic client models/names."""
+        updated = 0
+        with get_db(self.db_path) as conn:
+            query = "SELECT * FROM devices WHERE is_manual=0"
+            params = []
+            if site_id is not None:
+                query += " AND site_id=?"
+                params.append(site_id)
+            rows = conn.execute(query, params).fetchall()
+            for row in rows:
+                current_type = (row["device_type"] or "UNKNOWN").upper()
+                is_client_type = current_type in CLIENT_ENDPOINT_TYPES
+                if not is_client_type and current_type != "UNKNOWN":
+                    continue
+                prev_hostname = row["hostname"] or ""
+                prev_model = row["model"] or ""
+                clean_hostname = "" if _synthetic_hostname(prev_hostname) else prev_hostname
+                clean_model = "" if _synthetic_model(prev_model) else prev_model
+                try:
+                    evidence = json.loads(row["scan_evidence"] or "{}")
+                except (TypeError, ValueError):
+                    evidence = {}
+                if not isinstance(evidence, dict):
+                    evidence = {}
+                evidence_changed = False
+                if is_client_type or evidence.get("detected_type") in CLIENT_ENDPOINT_TYPES:
+                    evidence["detected_type"] = "UNKNOWN"
+                    evidence["classification_source"] = "excluded_client_endpoint"
+                    evidence["identity_confidence"] = "none"
+                    evidence_changed = True
+                if _synthetic_model(evidence.get("detected_model") or ""):
+                    evidence["detected_model"] = ""
+                    evidence_changed = True
+                if is_client_type or clean_hostname != prev_hostname or clean_model != prev_model or evidence_changed:
+                    conn.execute("""
+                        UPDATE devices SET device_type='UNKNOWN', hostname=?, model=?,
+                            scan_evidence=?, updated_at=CURRENT_TIMESTAMP
+                        WHERE id=?
+                    """, (clean_hostname, clean_model,
+                          json.dumps(evidence, ensure_ascii=False), row["id"]))
+                    updated += 1
+        return updated
 
     def apply_client_identity(self, device_id, device_type, name, os_name):
         """Name an unknown wireless client from the controller's client table."""
@@ -272,7 +384,7 @@ class DeviceRepository:
                     previous_hostname = existing["hostname"] or ""
                     previous_model = existing["model"] or ""
                     hostname = data.get("hostname") or (
-                        "" if unidentified and previous_hostname == "Celular / Móvil"
+                        "" if unidentified and _synthetic_hostname(previous_hostname)
                         else previous_hostname)
                     model = data.get("model") or (
                         "" if unidentified and _synthetic_model(previous_model)

@@ -379,6 +379,8 @@ def create_app(config_class=Config):
             return jsonify({"error": "La identificación avanzada está desactivada."}), 404
         site_id = active_site_id()
         counts = {}
+        demoted = device_repo.demote_client_endpoints(site_id) if site_id else 0
+        neighbor_updated = discovery_service.reconcile_stored_neighbors(site_id) if site_id else 0
         examined = updated = 0
         for device in (device_repo.get_all(site_id=site_id) if site_id else []):
             if device["device_type"] != "UNKNOWN" or device["is_manual"]:
@@ -412,7 +414,13 @@ def create_app(config_class=Config):
                      "reclassified": True}):
                 updated += 1
                 counts[result.device_type] = counts.get(result.device_type, 0) + 1
-        return jsonify({"examined": examined, "updated": updated, "by_type": counts})
+        return jsonify({
+            "examined": examined,
+            "updated": updated + neighbor_updated + demoted,
+            "by_type": counts,
+            "demoted_clients": demoted,
+            "lldp_enriched": neighbor_updated,
+        })
 
     @app.route("/api/devices/stale", methods=["POST"])
     def api_devices_stale():
