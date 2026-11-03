@@ -1,3 +1,4 @@
+import re
 """Read standard SNMP tables for a single managed device."""
 
 import asyncio
@@ -22,6 +23,8 @@ OIDS = {
     "vlan_name": "1.3.6.1.2.1.17.7.1.4.3.1.1",
     "vlan_egress": "1.3.6.1.2.1.17.7.1.4.3.1.2",
     "vlan_untagged": "1.3.6.1.2.1.17.7.1.4.3.1.4",
+    "vlan_fdb": "1.3.6.1.2.1.17.7.1.4.2.1.3",
+    "bridge_fdb_port": "1.3.6.1.2.1.17.4.3.1.2",
     "fdb_port": "1.3.6.1.2.1.17.7.1.2.2.1.2",
     "lldp_local_port": "1.0.8802.1.1.2.1.3.7.1.3",
     "lldp_name": "1.0.8802.1.1.2.1.4.1.1.9",
@@ -142,17 +145,30 @@ def build_inventory(tables):
                 membership.append({"if_index": if_index, "vlan": int(number),
                                    "mode": "UNTAGGED" if bridge_port in untagged else "TAGGED"})
 
-    mac_learnings = []
-    for suffix, value in tables.get("fdb_port", {}).items():
+    fdb_vlans = {}
+    for suffix, value in tables.get("vlan_fdb", {}).items():
+        vlan = _number(suffix.split(".")[-1])
+        if vlan is not None:
+            fdb_vlans.setdefault(_number(value), set()).add(vlan)
+
+    learned_ports = {}
+    per_vlan_ports = tables.get("fdb_port") or {}
+    ports = per_vlan_ports or tables.get("bridge_fdb_port", {})
+    for suffix, value in ports.items():
         parts = suffix.split(".")
-        if len(parts) != 7:
+        if len(parts) != (7 if per_vlan_ports else 6):
             continue
-        bridge_port = _number(value)
-        mac_learnings.append({
-            "vlan": int(parts[0]),
-            "mac": ":".join(f"{int(part):02X}" for part in parts[1:]),
-            "if_index": bridge_to_if.get(bridge_port),
-        })
+        if_index = bridge_to_if.get(_number(value))
+        if not if_index:
+            continue
+        vlan_ids = fdb_vlans.get(_number(parts[0]), set()) if per_vlan_ports else set()
+        vlan = next(iter(vlan_ids)) if len(vlan_ids) == 1 else 0
+        mac = ":".join(f"{int(part):02X}" for part in parts[-6:])
+        learned_ports.setdefault((mac, vlan), set()).add(if_index)
+    mac_learnings = [
+        {"mac": mac, "vlan": vlan, "if_index": next(iter(indices))}
+        for (mac, vlan), indices in learned_ports.items() if len(indices) == 1
+    ]
 
     if_names = {str(port["if_index"]): port["name"] for port in interfaces}
     local_ports = {suffix: _text(value)
@@ -333,3 +349,23 @@ def snmp_text(value):
 
 def snmp_mac(value):
     return _mac(value)
+
+
+def collect_gateway_neighbors(ip, credentials):
+    """Read reachable IPv4 neighbors and drop ambiguous address bindings."""
+    oid = "1.3.6.1.2.1.4.35.1"
+    tables = walk_snmp_columns(ip, credentials, {"mac": oid + ".4", "state": oid + ".7"})
+    candidates = {}
+    for suffix, value in tables["mac"].items():
+        parts = suffix.split(".")
+        if len(parts) != 7 or parts[1:3] != ["1", "4"]:
+            continue
+        if _number(tables["state"].get(suffix)) not in (1, 2, 3, 4):
+            continue
+        mac = _mac(value).upper().replace("-", ":")
+        if not re.fullmatch(r"(?:[0-9A-F]{2}:){5}[0-9A-F]{2}", mac):
+            continue
+        if mac == "00:00:00:00:00:00" or int(mac[:2], 16) & 1:
+            continue
+        candidates.setdefault(".".join(parts[3:]), set()).add(mac)
+    return {address: next(iter(macs)) for address, macs in candidates.items() if len(macs) == 1}

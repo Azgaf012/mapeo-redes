@@ -64,8 +64,8 @@ document.addEventListener("DOMContentLoaded", () => {
                     bar.className = "progress-bar bg-success";
                     document.getElementById("scan-current-step").textContent = job.warnings
                         ? `Escaneo completado con avisos: ${job.warnings}`
-                        : "Escaneo completado. Abriendo resumen…";
-                    setTimeout(() => window.location.assign("/"), job.warnings ? 4000 : 1200);
+                        : "Escaneo completado. Abriendo mapa…";
+                    setTimeout(() => window.location.assign("/topology"), job.warnings ? 4000 : 1200);
                     return;
                 }
                 if (job.status === "FAILED") {

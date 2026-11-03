@@ -1,3 +1,4 @@
+import subprocess
 import ipaddress
 import json
 import os
@@ -223,8 +224,13 @@ def create_app(config_class=Config):
         site_id = detail["device"]["site_id"]
         other_devices = [d for d in device_repo.get_all(site_id=site_id) if d["id"] != device_id]
 
+        try:
+            diagnostics = json.loads(detail["device"].get("scan_evidence") or "{}")
+        except ValueError:
+            diagnostics = {}
         return render_template(
             "device_detail.html",
+            diagnostics=diagnostics if isinstance(diagnostics, dict) else {},
             device=detail["device"],
             connections=detail["connections"],
             other_devices=other_devices,
@@ -235,6 +241,20 @@ def create_app(config_class=Config):
             unresolved_neighbors=[neighbor for neighbor in detail_repo.get_unresolved(site_id)
                                   if neighbor["source_device_id"] == device_id],
         )
+
+    @app.post("/api/devices/<int:device_id>/trace")
+    def device_trace(device_id):
+        from scanner.diagnostics import trace_route
+
+        device = device_repo.get_by_id(device_id)
+        if not device or device["site_id"] != active_site_id():
+            return jsonify(error="Dispositivo no encontrado."), 404
+        try:
+            return jsonify(output=trace_route(device["ip"]))
+        except RuntimeError as exc:
+            return jsonify(error=str(exc)), 503
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return jsonify(error="No se pudo completar el seguimiento de ruta."), 503
 
     @app.route("/devices/<int:device_id>/delete", methods=["POST"])
     def delete_device(device_id):

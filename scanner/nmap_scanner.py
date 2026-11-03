@@ -57,3 +57,25 @@ def scan_host_services(ip, ports=None):
 
     # Native Python fallback
     return quick_socket_port_scan(ip, ports)
+
+
+def identify_open_services(ip, ports):
+    """Identify services on a small set of previously observed TCP ports."""
+    ports = sorted(set(ports) - {9100})[:8]
+    if not ports or not is_nmap_available():
+        return []
+    try:
+        import nmap
+    except ImportError:
+        return []
+    try:
+        scanner = nmap.PortScanner()
+        scanner.scan(ip, ",".join(map(str, ports)),
+                     arguments="-sT -sV --version-light -Pn --host-timeout 12s",
+                     timeout=15)
+        tcp = scanner[ip].get("tcp", {}) if ip in scanner.all_hosts() else {}
+        return [{"port": port, "name": row.get("name", ""),
+                 "product": row.get("product", ""), "version": row.get("version", "")}
+                for port, row in tcp.items() if row["state"] == "open"]
+    except (OSError, nmap.PortScannerError):
+        return []

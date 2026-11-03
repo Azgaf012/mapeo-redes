@@ -13,6 +13,11 @@ python app.py
 
 La aplicación abre en `http://localhost:5000`. Si Nmap está instalado, se usa para revisar puertos TCP; en caso contrario se usa el sondeo TCP integrado. Para obtener interfaces, VLAN, tabla MAC y vecinos LLDP/CDP se necesitan equipos administrables y credenciales SNMP con permiso de lectura. El formulario acepta SNMPv3 y SNMPv2c; las credenciales se usan en ese escaneo y no se guardan en SQLite.
 
+El escaneo consulta por SNMP la tabla de vecinos IPv4 del gateway y usa sus MAC cuando faltan en la tabla local. En switches, usa la tabla MAC por VLAN y recurre a BRIDGE-MIB cuando no está disponible. La ficha del equipo muestra el origen de la MAC y los servicios identificados por Nmap en equipos sin clasificar. En Windows, **Diagnóstico de red → Ver ruta IP** ejecuta un seguimiento desde el servidor.
+
+Si la sede usa Windows DHCP, configura la variable de entorno `SCAN_DHCP_SERVER` con el nombre o IP del servidor antes de iniciar la aplicación. La cuenta que ejecuta la aplicación necesita acceso de lectura al servidor DHCP y el módulo PowerShell `DhcpServer`. Las concesiones enriquecen los equipos encontrados en el escaneo.
+
+
 `MAX_SCAN_HOSTS` controla el máximo de direcciones por escaneo (predeterminado: 16384) y `SCAN_HOST_WORKERS` la concurrencia de inspección (predeterminado: 12). El rango se valida y su tamaño se muestra antes de iniciar. Los equipos que no respondan dentro del rango escaneado permanecen en inventario como `OFFLINE`; el filtro «Solo conectados» los oculta.
 
 ## Cómo leer el mapa
@@ -39,7 +44,7 @@ El resumen muestra las subredes registradas y los tipos de equipos inventariados
 
 La exportación CSV conserva sus columnas anteriores y añade señales para revisar la detección: puertos TCP, tipo y modelo detectados en el último escaneo antes de una corrección manual, origen de la clasificación, nombres DNS/NetBIOS, TTL, respuesta e identidad SNMP, cantidad de interfaces y vecinos, título y puerto web, advertencia SNMP y resultados de las sondas web en JSON (estado HTTP, servidor, redirección o error). Los equipos registrados antes de esta versión tendrán esas señales vacías hasta su próximo escaneo. No se exportan credenciales SNMP.
 
-El mapa físico representa solo relaciones respaldadas por LLDP/CDP o registradas manualmente. Las tablas MAC ayudan a investigar puertos, pero por sí solas no prueban un cable directo. Algunos equipos y redes aisladas pueden no ser visibles desde la computadora de escaneo.
+El mapa físico distingue los enlaces LLDP/CDP o manuales de las relaciones por canal entre un grabador y sus cámaras. Las tablas MAC ayudan a investigar puertos, pero por sí solas no prueban un cable directo. Algunos equipos y redes aisladas pueden no ser visibles desde la computadora de escaneo.
 
 ## Asociaciones cliente–AP desde CSV
 

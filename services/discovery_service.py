@@ -3,6 +3,7 @@
 import ipaddress
 import json
 import socket
+import subprocess
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
@@ -11,6 +12,7 @@ from repositories.network_detail_repository import NetworkDetailRepository
 from repositories.ap_association_repository import ApAssociationRepository
 from services.ap_association_service import ApAssociationService
 from scanner.arp import get_arp_table
+from scanner.diagnostics import read_dhcp_leases
 from scanner.classifier import (
     classify_device, classify_lldp_neighbor, is_client_endpoint_type
 )
@@ -20,9 +22,9 @@ from scanner.enricher import (detect_os_info, evaluate_security_status,
                               format_open_ports_summary, query_netbios_details)
 from scanner.fingerprint import fingerprint_device
 from scanner.network import detect_network_config
-from scanner.nmap_scanner import scan_host_services
+from scanner.nmap_scanner import identify_open_services, scan_host_services
 from scanner.ping import ping_sweep
-from scanner.snmp_inventory import collect_snmp_inventory
+from scanner.snmp_inventory import collect_gateway_neighbors, collect_snmp_inventory
 from scanner.topology import resolve_neighbor
 from scanner.vendor import lookup_vendor
 
@@ -154,6 +156,8 @@ class DiscoveryService:
             if identity_evidence:
                 identity_evidence["identity_confidence"] = "none"
         evidence = {
+            "services": identify_open_services(ip, open_ports)
+            if device_type == "UNKNOWN" and classification_source != "excluded_client_endpoint" else [],
             "detected_type": device_type,
             "detected_model": detected_model,
             "classification_source": classification_source,
@@ -295,6 +299,20 @@ class DiscoveryService:
                 alive.add(local_ip)
             self.device_repo.mark_offline_or_cleanup(site_id, alive, cidr=cidr)
             arp_table = get_arp_table()
+            warnings = []
+            gateway_neighbors = {}
+            if gateway:
+                try:
+                    gateway_neighbors = collect_gateway_neighbors(gateway, credentials)
+                except Exception as exc:
+                    warnings.append(f"Vecinos del gateway: {type(exc).__name__}")
+            local_neighbors = dict(arp_table)
+            arp_table = {**gateway_neighbors, **{ip: mac for ip, mac in arp_table.items() if mac}}
+            try:
+                leases = read_dhcp_leases(network.network_address)
+            except (OSError, ValueError, subprocess.SubprocessError) as exc:
+                leases = {}
+                warnings.append(f"Concesiones DHCP: {type(exc).__name__}")
             ips = sorted(alive, key=ipaddress.IPv4Address)
             if self.identity:
                 self.scan_job_repo.update_progress(job_id, 44, "Descubriendo fabricantes...")
@@ -304,7 +322,6 @@ class DiscoveryService:
 
             neighbors = []
             snmp_devices = []
-            warnings = []
             with ThreadPoolExecutor(max_workers=self.host_workers) as pool:
                 futures = {pool.submit(self._inspect_host, ip, gateway, local_ip,
                                        local_mac, arp_table, sweep.details,
@@ -313,6 +330,12 @@ class DiscoveryService:
                     ip = futures[future]
                     try:
                         payload, inventory, found_neighbors, warning = future.result()
+                        evidence = json.loads(payload.get("scan_evidence") or "{}")
+                        if gateway_neighbors.get(ip) and not local_neighbors.get(ip) and ip != local_ip:
+                            evidence["mac_source"] = "Tabla de vecinos SNMP del gateway"
+                        if ip in leases:
+                            evidence["dhcp_lease"] = leases[ip]
+                        payload["scan_evidence"] = json.dumps(evidence, ensure_ascii=False)
                         device_id = self.device_repo.upsert_discovered(site_id, payload)
                         if inventory.get("has_snmp"):
                             self.detail_repo.save_inventory(site_id, device_id, inventory)

@@ -177,3 +177,39 @@ test('logical view hides unidentified client nodes and summarizes them on the ga
     assert.equal(overview.elements.filter(e => e.group === 'edges').length, 2);
 });
 
+
+test('mixed inventory with 392 devices keeps infrastructure visible and every client reachable', () => {
+    // Counts from the inventory export. All identifiers and the subnet are synthetic.
+    const counts = {
+        ACCESS_POINT: 21, CAMERA: 20, FIREWALL: 1, LAPTOP: 1, NVR: 1,
+        PC: 7, PHONE: 7, PRINTER: 1, SMART_TV: 3, SWITCH: 2, UNKNOWN: 328
+    };
+    const subnet = '192.0.2.0/23';
+    const elements = Object.entries(counts).flatMap(([type, count]) =>
+        Array.from({ length: count }, (_, index) =>
+            node(type + '-' + index, type, type === 'CAMERA' && index < 6 ? '' : subnet)));
+    const options = { showClientGroupNodes: false };
+    const overview = buildPhysicalOverview(elements, null, 0, options);
+    const infrastructureIds = elements.filter(item =>
+        ['ACCESS_POINT', 'CAMERA', 'FIREWALL', 'NVR', 'PRINTER', 'SWITCH'].includes(item.data.device_type))
+        .map(item => item.data.id);
+    assert.equal(overview.totalClientCount, 346);
+    assert.deepEqual(overview.elements.map(item => item.data.id), infrastructureIds);
+    assert.equal(overview.groups.length, 1);
+    const [group] = overview.groups;
+    assert.equal(group.pages, 6);
+
+    const seen = [];
+    for (let page = 0; page < group.pages; page++) {
+        const expanded = buildPhysicalOverview(elements, group.id, page, options);
+        const visibleIds = expanded.elements.map(item => item.data.id);
+        const pageClients = visibleIds.filter(id => !infrastructureIds.includes(id));
+        assert.equal(pageClients.length, page === 5 ? 46 : 60);
+        assert.deepEqual(pageClients, expanded.activeGroup.visibleMemberIds);
+        assert(expanded.elements.every(item => item.group === 'nodes'));
+        seen.push(...pageClients);
+    }
+    const clientIds = elements.map(item => item.data.id).filter(id => !infrastructureIds.includes(id));
+    assert.deepEqual(seen.sort(), clientIds.sort());
+    assert.deepEqual(buildPhysicalOverview(elements, null, 0, options), overview);
+});

@@ -113,6 +113,9 @@ function buildCardLabel(data) {
 
     const ipLine = data.ip || "";
     const metaParts = [];
+    if (data.relationship_label) {
+        metaParts.push(data.relationship_label);
+    }
     if (data.uplink_port) {
         metaParts.push(`Pto ${data.uplink_port}`);
     }
@@ -128,6 +131,8 @@ function buildCardLabel(data) {
 }
 
 function formatEdgeLabel(edgeData) {
+    if (edgeData.discovery_method === "MAC_PORT") return `MAC · Pto ${edgeData.source_port}`;
+    if (edgeData.discovery_method === "NVR_CHANNEL") return `Canal ${edgeData.channel}`;
     const srcPort = String(edgeData.source_port || "").trim();
     const dstPort = String(edgeData.target_port || "").trim();
     const cleanDst = (!dstPort || dstPort === "?" || /^0x[0-9a-f]{10,}$/i.test(dstPort) || dstPort === "bond0")
@@ -146,7 +151,7 @@ function buildArchitecturalPositions(elements, activeGroup) {
     const TIER_GAP_Y = 136;
     const MAX_COLS = 6;
 
-    const placeRows = (list, startY, cols = MAX_COLS) => {
+    const placeRows = (list, startY, cols = MAX_COLS, centerX = 0) => {
         if (!list.length) return startY;
         const totalRows = Math.ceil(list.length / cols);
         for (let r = 0; r < totalRows; r++) {
@@ -155,7 +160,7 @@ function buildArchitecturalPositions(elements, activeGroup) {
             const y = startY + r * ROW_GAP_Y;
             slice.forEach((node, idx) => {
                 positions[node.data.id] = {
-                    x: Math.round(-rowWidth / 2 + idx * CARD_GAP_X),
+                    x: Math.round(centerX - rowWidth / 2 + idx * CARD_GAP_X),
                     y: Math.round(y)
                 };
             });
@@ -176,17 +181,34 @@ function buildArchitecturalPositions(elements, activeGroup) {
     }
 
     const physicalDegree = new Map();
-    const linkedApIds = new Set();
+    const parentsByChild = new Map();
+    const addParent = (child, parent) => {
+        if (!parentsByChild.has(child)) parentsByChild.set(child, new Set());
+        parentsByChild.get(child).add(parent);
+    };
     const byId = new Map(nodes.map(n => [n.data.id, n]));
     for (const edge of edges) {
-        if (!["LLDP", "CDP", "MANUAL"].includes(edge.data.discovery_method)) continue;
-        const { source, target } = edge.data;
+        const { source, target, discovery_method: method } = edge.data;
+        if (method === "MAC_PORT") {
+            if (byId.get(target)?.data.device_type === "ACCESS_POINT" &&
+                !parentsByChild.has(target)) addParent(target, source);
+            continue;
+        }
+        if (method === "NVR_CHANNEL") {
+            addParent(target, source);
+            continue;
+        }
+        if (!["LLDP", "CDP", "MANUAL"].includes(method)) continue;
         physicalDegree.set(source, (physicalDegree.get(source) || 0) + 1);
         physicalDegree.set(target, (physicalDegree.get(target) || 0) + 1);
         const sNode = byId.get(source);
         const tNode = byId.get(target);
-        if (sNode?.data.device_type === "ACCESS_POINT") linkedApIds.add(source);
-        if (tNode?.data.device_type === "ACCESS_POINT") linkedApIds.add(target);
+        if (sNode?.data.device_type === "ACCESS_POINT" && tNode?.data.device_type === "SWITCH") {
+            addParent(source, target);
+        }
+        if (tNode?.data.device_type === "ACCESS_POINT" && sNode?.data.device_type === "SWITCH") {
+            addParent(target, source);
+        }
     }
 
     const sortByPortThenIp = (a, b) => {
@@ -206,34 +228,44 @@ function buildArchitecturalPositions(elements, activeGroup) {
         n.data.kind === "device" && ["SWITCH", "CONTROLLER"].includes(n.data.device_type)
     ).sort((a, b) => (physicalDegree.get(b.data.id) || 0) - (physicalDegree.get(a.data.id) || 0) || ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
 
-    const tier3LinkedAps = nodes.filter(n =>
-        n.data.kind === "device" && n.data.device_type === "ACCESS_POINT" && linkedApIds.has(n.data.id)
-    ).sort(sortByPortThenIp);
-
-    const tier4OtherAps = nodes.filter(n =>
-        n.data.kind === "device" && n.data.device_type === "ACCESS_POINT" && !linkedApIds.has(n.data.id)
-    ).sort(sortByPortThenIp);
-
-    const tier5Services = nodes.filter(n =>
-        n.data.kind === "device" && ["SERVER", "NVR", "PRINTER", "UPS"].includes(n.data.device_type)
-    ).sort((a, b) => ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
-
-    const tier6Cameras = nodes.filter(n =>
-        n.data.kind === "device" && n.data.device_type === "CAMERA"
-    ).sort((a, b) => ipSortValue(a.data.ip) - ipSortValue(b.data.ip));
-
-    const placed = new Set([
-        ...tier0NetVlan, ...tier1Core, ...tier2Switches,
-        ...tier3LinkedAps, ...tier4OtherAps, ...tier5Services, ...tier6Cameras
-    ].map(n => n.data.id));
-    const tier7Rest = nodes.filter(n => !placed.has(n.data.id));
-
-    let currentY = 0;
-    for (const tier of [tier0NetVlan, tier1Core, tier2Switches, tier3LinkedAps, tier4OtherAps, tier5Services, tier6Cameras, tier7Rest]) {
-        if (tier.length) {
-            currentY = placeRows(tier, currentY, MAX_COLS);
-        }
+    const recorders = nodes.filter(n => n.data.device_type === "NVR");
+    const childrenByParent = new Map();
+    for (const [child, parents] of parentsByChild) {
+        if (parents.size !== 1) continue;
+        const [parent] = parents;
+        if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
+        childrenByParent.get(parent).push(byId.get(child));
     }
+    const grouped = new Set([...childrenByParent.values()].flat());
+    let currentY = placeRows(tier0NetVlan, 0);
+    currentY = placeRows(tier1Core, currentY);
+    // Put switch peers on the same row so their links stay above the AP rows.
+    const switchWidths = tier2Switches.map(parent =>
+        Math.max(1, Math.min(MAX_COLS, childrenByParent.get(parent.data.id)?.length || 0)) * CARD_GAP_X
+    );
+    let left = -switchWidths.reduce((total, width) => total + width, 0) / 2;
+    let afterSwitches = currentY;
+    tier2Switches.forEach((parent, index) => {
+        const width = switchWidths[index];
+        const center = left + width / 2;
+        const childY = placeRows([parent], currentY, 1, center);
+        const children = childrenByParent.get(parent.data.id) || [];
+        afterSwitches = Math.max(afterSwitches,
+            placeRows(children.sort(sortByPortThenIp), childY, MAX_COLS, center));
+        left += width;
+    });
+    currentY = afterSwitches;
+    for (const recorder of recorders) {
+        currentY = placeRows([recorder], currentY);
+        const cameras = childrenByParent.get(recorder.data.id) || [];
+        currentY = placeRows(cameras.sort(sortByPortThenIp), currentY);
+    }
+
+    const remaining = nodes.filter(n => !positions[n.data.id] && !grouped.has(n));
+    for (const type of ["ACCESS_POINT", "CAMERA"]) {
+        currentY = placeRows(remaining.filter(n => n.data.device_type === type), currentY);
+    }
+    placeRows(remaining.filter(n => !positions[n.data.id]), currentY);
     return positions;
 }
 
@@ -316,6 +348,7 @@ document.addEventListener("DOMContentLoaded", () => {
             if (data.switch_association) {
                 addDetail("Switch asociado por MAC", data.switch_association.switch_id);
                 addDetail("Puerto donde se aprendió la MAC", data.switch_association.port);
+                addDetail("MAC observada", data.switch_association.observed_at);
                 addDetail("Alcance de la asociación", data.switch_association.evidence);
             }
             if (data.ap_association) {
@@ -420,7 +453,7 @@ document.addEventListener("DOMContentLoaded", () => {
         );
         const active = overview.activeGroup;
         document.getElementById("topo-group-filter").classList.remove("d-none");
-        groupSelect.replaceChildren(new Option("Vista limpia (solo infraestructura y resumen)", ""));
+        groupSelect.replaceChildren(new Option("Resumen de la red", ""));
         overview.groups.forEach(group => groupSelect.add(new Option(
             `${group.parentType === "ap" ? "AP" : group.parentType === "switch" ? "Switch" : "Subred"}: ${group.title} (${group.count} clientes)`, group.id)));
         groupSelect.value = active ? active.id : "";
@@ -439,13 +472,21 @@ document.addEventListener("DOMContentLoaded", () => {
         }
 
         const uplinkPorts = new Map();
+        const cameraChannels = new Map();
+        const linkedAps = new Set();
         const nodeById = new Map(
             overview.elements.filter(el => el.group === "nodes").map(el => [el.data.id, el])
         );
         for (const el of overview.elements) {
-            if (el.group !== "edges" || !["LLDP", "CDP"].includes(el.data.discovery_method)) continue;
+            if (el.group !== "edges") continue;
+            if (el.data.discovery_method === "NVR_CHANNEL") {
+                cameraChannels.set(el.data.target, el.data.channel);
+            }
+            if (!["LLDP", "CDP", "MANUAL"].includes(el.data.discovery_method)) continue;
             const srcNode = nodeById.get(el.data.source);
             const dstNode = nodeById.get(el.data.target);
+            if (srcNode?.data.device_type === "ACCESS_POINT") linkedAps.add(el.data.source);
+            if (dstNode?.data.device_type === "ACCESS_POINT") linkedAps.add(el.data.target);
             if (srcNode?.data.device_type === "SWITCH" && el.data.source_port) {
                 uplinkPorts.set(el.data.target, el.data.source_port);
             } else if (dstNode?.data.device_type === "SWITCH" && el.data.target_port) {
@@ -479,9 +520,16 @@ document.addEventListener("DOMContentLoaded", () => {
             const type = element.data.kind === "device" ? element.data.device_type
                 : element.data.kind === "type" ? element.data.name : element.data.kind;
             const uplinkPort = uplinkPorts.get(element.data.id) || "";
+            const channel = cameraChannels.get(element.data.id);
+            let relationshipLabel = channel ? `NVR · Canal ${channel}` : "";
+            if (view === "physical" && type === "ACCESS_POINT" && !linkedAps.has(element.data.id)) {
+                relationshipLabel = element.data.switch_association
+                    ? `MAC · Pto ${element.data.switch_association.port}` : "Sin enlace visible";
+            }
             const enrichedData = {
                 ...element.data,
                 uplink_port: uplinkPort,
+                relationship_label: relationshipLabel,
                 icon: mapIcon(type),
                 badge_icon: mapCardBadge(type),
                 icon_color: mapDeviceInfo(type).color
@@ -501,10 +549,17 @@ document.addEventListener("DOMContentLoaded", () => {
             ? `${infraNodeCount} equipos en diagrama${clientSummaryText}`
             : view === "inventory"
                 ? `${infraNodeCount} equipos en diagrama · ${elements.filter(element => element.data.kind === "type").length} categorías${clientSummaryText}`
-                : `${infraNodeCount} equipos en diagrama · ${elements.filter(element => element.group === "edges").length} enlaces físicos${clientSummaryText}`;
+                : `${infraNodeCount} equipos en diagrama · ${elements.filter(element => element.group === "edges" && !["NVR_CHANNEL", "MAP_SUMMARY", "MAC_PORT"].includes(element.data.discovery_method)).length} enlaces físicos${clientSummaryText}`;
         document.getElementById("map-view-label").textContent = {
             physical: "Arquitectura física", logical: "Arquitectura lógica", inventory: "Inventario por capa"
         }[view];
+        const macCount = elements.filter(el => el.data.discovery_method === "MAC_PORT").length;
+        if (macCount) document.getElementById("map-summary").textContent += ` · ${macCount} puertos observados`;
+        const nvrCount = elements.filter(el => el.data.discovery_method === "NVR_CHANNEL").length;
+        if (nvrCount) document.getElementById("map-summary").textContent += ` · ${nvrCount} canales NVR`;
+        const noLinks = document.getElementById("map-no-links");
+        noLinks.classList.toggle("d-none", view !== "physical" || !deviceCount ||
+            elements.some(element => element.group === "edges" && !["NVR_CHANNEL", "MAP_SUMMARY", "MAC_PORT"].includes(element.data.discovery_method)));
         document.getElementById("gateway-legend").classList.toggle("d-none", view !== "logical");
         renderUnresolved(data.unresolved_neighbors || []);
         renderDeviceLegend(data.counts);
@@ -539,7 +594,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     "text-margin-x": 20,
                     "text-margin-y": 0,
                     "text-background-opacity": 0,
-                    "min-zoomed-font-size": 6,
+                    "min-zoomed-font-size": 0,
                     "z-index": 10
                 }},
                 { selector: 'node[device_type = "FIREWALL"], node[device_type = "ROUTER"], node[device_type = "SWITCH"]', style: {
@@ -604,7 +659,7 @@ document.addEventListener("DOMContentLoaded", () => {
                 { selector: 'edge[discovery_method = "LLDP"], edge[discovery_method = "CDP"]',
                   style: {
                       "line-color": "#15803d",
-                      "width": 2.8,
+                      "width": 4,
                       "label": "data(edge_label)",
                       "font-size": 9.5,
                       "font-weight": "700",
@@ -615,6 +670,13 @@ document.addEventListener("DOMContentLoaded", () => {
                       "text-background-shape": "roundrectangle",
                       "text-rotation": "none"
                   } },
+                { selector: 'edge[discovery_method = "MAC_PORT"]',
+                  style: { "line-color": "#2563eb", "line-style": "dotted", "width": 3,
+                      "label": "data(edge_label)", "font-size": 11, "color": "#1d4ed8" } },
+                { selector: 'edge[discovery_method = "NVR_CHANNEL"]',
+                  style: { "line-color": "#be185d", "line-style": "dashed", "width": 3,
+                      "curve-style": "straight", "target-arrow-shape": "triangle",
+                      "target-arrow-color": "#be185d" } },
                 { selector: 'edge[discovery_method = "MANUAL"]',
                   style: { "line-color": "#8b5cf6", "target-arrow-color": "#8b5cf6", "line-style": "dashed" } },
                 { selector: 'edge[discovery_method = "GATEWAY_CONFIG"]',
@@ -627,7 +689,8 @@ document.addEventListener("DOMContentLoaded", () => {
                   style: { "line-color": "#0284c7", "target-arrow-color": "#0284c7",
                       "line-style": "dotted", "target-arrow-shape": "none", "width": 2 } },
                 { selector: 'edge[discovery_method = "MAP_SUMMARY"][parent_type = "ap"]',
-                  style: { "line-color": "#047857" } }
+                  style: { "line-color": "#047857" } },
+                { selector: ".map-muted", style: { "opacity": 0.22 } }
             ],
             layout: {
                 name: "preset",
@@ -648,11 +711,16 @@ document.addEventListener("DOMContentLoaded", () => {
                 render(lastData);
                 return;
             }
+            graph.elements().removeClass("map-muted");
+            if (view === "physical" && event.target.connectedEdges().length) {
+                graph.elements().difference(event.target.closedNeighborhood()).addClass("map-muted");
+            }
             inspect(node, false);
         });
         graph.on("tap", "edge", event => inspect(event.target.data(), true));
         graph.on("tap", event => {
             if (event.target === graph) {
+                graph.elements().removeClass("map-muted");
                 document.getElementById("sp-title").textContent = "Selecciona un equipo o enlace";
                 document.getElementById("sp-details").replaceChildren();
                 document.getElementById("sp-btn-detail").classList.add("d-none");

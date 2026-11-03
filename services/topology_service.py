@@ -22,7 +22,7 @@ class TopologyService:
         self.detail_repo = detail_repo or NetworkDetailRepository(device_repo.db_path)
         self.ap_association_repo = ap_association_repo or ApAssociationRepository(device_repo.db_path)
 
-    def _mac_associations(self, site_id, devices):
+    def _mac_associations(self, site_id, devices, all_devices, physical_links):
         """Associate MACs using switch ports, AP radios, or a recent imported snapshot."""
         def normalized(mac):
             return "".join(char for char in (mac or "").upper() if char in "0123456789ABCDEF")
@@ -46,6 +46,12 @@ class TopologyService:
                             if device["device_type"] == "SWITCH"}
         visible_aps = {device["id"]: device for device in devices
                        if device["device_type"] == "ACCESS_POINT"}
+        uplinks = set()
+        switch_ids = {device["id"] for device in all_devices if device["device_type"] == "SWITCH"}
+        for link in physical_links:
+            if {link["source_device_id"], link["target_device_id"]} <= switch_ids:
+                uplinks.add((link["source_device_id"], link["source_port"]))
+                uplinks.add((link["target_device_id"], link["target_port"]))
         switch_associations = {}
         ap_associations = {}
         cutoff = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(days=1)
@@ -54,12 +60,15 @@ class TopologyService:
             candidates = [row for row in switch_sightings.get(mac, [])
                           if row["infrastructure_id"] in visible_switches
                           and row["infrastructure_id"] != device["id"]
+                          and (row["infrastructure_id"], row["port"]) not in uplinks
                           and len(port_macs[(row["infrastructure_id"], row["interface_id"])]) == 1]
-            switches = {row["infrastructure_id"] for row in candidates}
-            if len(switches) == 1:
+            ports = {(row["infrastructure_id"], row["interface_id"]) for row in candidates}
+            if len(ports) == 1:
+                candidates.sort(key=lambda row: row["observed_at"] or "", reverse=True)
                 switch_associations[device["id"]] = {
                     "switch_id": str(candidates[0]["infrastructure_id"]),
                     "port": candidates[0]["port"],
+                    "observed_at": candidates[0]["observed_at"],
                     "evidence": "MAC aprendida en un puerto del switch; no confirma cable directo.",
                 }
             recent = []
@@ -153,8 +162,10 @@ class TopologyService:
             devices.append(device)
 
         ids = {device["id"] for device in devices}
-        switch_associations, ap_associations = self._mac_associations(site_id, devices)
         physical_links = self.detail_repo.get_links(site_id)
+        switch_associations, ap_associations = self._mac_associations(
+            site_id, devices, all_devices, physical_links
+        )
         medium_by_id = {}
         for device_id, association in ap_associations.items():
             if association.get("source") == "ap_client_csv":
@@ -220,7 +231,46 @@ class TopologyService:
                 "connection_medium": medium, "medium_evidence": medium_evidence,
             }})
 
+        if view in {"physical", "logical"} and not method:
+            recorders = {d["ip"]: d for d in devices if d["device_type"] == "NVR"}
+            for camera in devices:
+                if camera["device_type"] != "CAMERA":
+                    continue
+                try:
+                    metadata = json.loads(camera.get("scan_evidence") or "{}")
+                except ValueError:
+                    metadata = {}
+                if not isinstance(metadata, dict):
+                    metadata = {}
+                legacy = re.fullmatch(r"Canal (\d+) del NVR (\S+)", camera.get("description") or "")
+                recorder_ip = metadata.get("nvr_ip") or (legacy[2] if legacy else "")
+                channel = metadata.get("nvr_channel") or (legacy[1] if legacy else "")
+                recorder = recorders.get(str(recorder_ip))
+                if recorder and str(channel).isdigit():
+                    elements.append({"group": "edges", "data": {
+                        "id": f"nvr:{camera['id']}", "source": str(recorder["id"]),
+                        "target": str(camera["id"]), "discovery_method": "NVR_CHANNEL",
+                        "channel": str(channel), "observed_at": camera.get("last_seen"),
+                        "evidence": f"Canal {channel} registrado en el grabador.",
+                    }})
+
         if view == "physical":
+            confirmed = {frozenset((link["source_device_id"], link["target_device_id"]))
+                         for link in physical_links}
+            if not method:
+                for device in devices:
+                    association = switch_associations.get(device["id"])
+                    if not association or device["device_type"] not in {"ACCESS_POINT", "CAMERA"}:
+                        continue
+                    switch_id = association["switch_id"]
+                    if frozenset((int(switch_id), device["id"])) in confirmed:
+                        continue
+                    elements.append({"group": "edges", "data": {
+                        "id": f"mac-port:{device['id']}", "source": switch_id,
+                        "target": str(device["id"]), "discovery_method": "MAC_PORT",
+                        "source_port": association["port"], "confidence": "MEDIUM",
+                        "observed_at": association["observed_at"], "evidence": association["evidence"],
+                    }})
             for link in physical_links:
                 if link["source_device_id"] in ids and link["target_device_id"] in ids:
                     if method and link["protocol"] != method:

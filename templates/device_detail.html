@@ -30,6 +30,30 @@
         </div>
     </div>
 
+    <div class="col-12">
+        <details class="card p-3">
+            <summary class="fw-semibold">Diagnóstico de red</summary>
+            {% if diagnostics.mac_source %}
+            <p class="small mt-2 mb-1">Fuente de la MAC: {{ diagnostics.mac_source }}</p>
+            {% endif %}
+            {% if diagnostics.dhcp_lease %}
+            <p class="small mt-2 mb-1">Concesión DHCP: {{ diagnostics.dhcp_lease.hostname or 'Sin nombre' }}
+                · {{ diagnostics.dhcp_lease.client_id or 'Sin identificador' }}</p>
+            {% endif %}
+            {% if diagnostics.services %}
+            <ul class="small mt-2">
+                {% for service in diagnostics.services %}
+                <li>TCP {{ service.port }} · {{ service.name }} {{ service.product }} {{ service.version }}</li>
+                {% endfor %}
+            </ul>
+            {% endif %}
+            <p class="small text-muted mt-2">La ruta muestra los routers que responden desde el servidor de escaneo.</p>
+            <button type="button" id="device-trace" class="btn btn-sm btn-outline-primary align-self-start"
+                    data-url="{{ url_for('device_trace', device_id=device.id) }}">Ver ruta IP</button>
+            <pre id="device-trace-result" class="small mt-2 mb-0 text-wrap" role="status"></pre>
+        </details>
+    </div>
+
     <!-- Left Column: Technical Specs -->
     <div class="col-lg-4">
         <div class="card stat-card mb-4">
@@ -398,6 +422,22 @@ function addManualConnection() {
         }
     });
 }
+
+document.getElementById("device-trace").addEventListener("click", async event => {
+    const button = event.currentTarget;
+    const result = document.getElementById("device-trace-result");
+    button.disabled = true;
+    result.textContent = "Consultando ruta IP…";
+    try {
+        const response = await fetch(button.dataset.url, { method: "POST" });
+        const data = await response.json();
+        result.textContent = data.output || data.error || "Sin respuesta.";
+    } catch {
+        result.textContent = "No se pudo consultar la ruta.";
+    } finally {
+        button.disabled = false;
+    }
+});
 
 function deleteConnection(connId) {
     if (!confirm("¿Desea eliminar este enlace?")) return;

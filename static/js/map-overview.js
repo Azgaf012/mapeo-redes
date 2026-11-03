@@ -7,7 +7,7 @@
     ]);
     const LOGICAL_ONLY_METHODS = new Set([
         'GATEWAY_CONFIG', 'NETWORK_GATEWAY', 'NETWORK_MEMBERSHIP',
-        'VLAN_MEMBERSHIP', 'INVENTORY_GROUP', 'MAP_SUMMARY'
+        'VLAN_MEMBERSHIP', 'INVENTORY_GROUP', 'MAP_SUMMARY', 'MAC_PORT'
     ]);
 
     function buildPhysicalOverview(elements, expandedId = null, requestedPage = 0, options = {}) {
