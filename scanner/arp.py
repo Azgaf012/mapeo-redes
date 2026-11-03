@@ -15,14 +15,27 @@ def normalize_mac(mac_str):
         return ":".join(clean[i:i+2] for i in range(0, 12, 2))
     return mac_str.upper().replace("-", ":")
 
+class ArpTable(dict):
+    command_result = None
+
+
 def get_arp_table():
     """
     Executes 'arp -a' and returns a mapping of { ip: mac }.
     Filters out broadcast and multicast entries.
     """
-    arp_map = {}
+    arp_map = ArpTable()
     try:
-        output = subprocess.check_output("arp -a", shell=True, text=True, timeout=5)
+        result = subprocess.run(["arp", "-a"], capture_output=True, text=True,
+                                errors="replace", timeout=5)
+        output = result.stdout
+        arp_map.command_result = {
+            "comando": "arp -a", "codigo": result.returncode,
+            "stdout": ARP_REGEX.sub(lambda match: f"{match[1]}    [MAC omitida]", output)[:2000],
+            "stderr": result.stderr[:500],
+        }
+        if result.returncode:
+            return arp_map
         for line in output.splitlines():
             match = ARP_REGEX.search(line)
             if match:
@@ -38,7 +51,7 @@ def get_arp_table():
                     continue
 
                 arp_map[ip] = mac
-    except Exception:
-        pass
+    except (OSError, subprocess.SubprocessError) as exc:
+        arp_map.command_result = {"comando": "arp -a", "error": type(exc).__name__}
 
     return arp_map

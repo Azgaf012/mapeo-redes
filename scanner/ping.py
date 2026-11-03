@@ -8,10 +8,11 @@ from scanner.arp import get_arp_table
 
 class PingResult:
     """Rich ping outcome compatible with both boolean checks and attribute access."""
-    def __init__(self, alive=False, latency_ms=0.0, ttl=0):
+    def __init__(self, alive=False, latency_ms=0.0, ttl=0, command_result=None):
         self.alive = alive
         self.latency_ms = latency_ms
         self.ttl = ttl
+        self.command_result = command_result
 
     def __bool__(self):
         return bool(self.alive)
@@ -24,6 +25,8 @@ class SweepResult(list):
     def __init__(self, ips, details=None):
         super().__init__(ips)
         self.details = details or {}
+        self.command_samples = []
+        self.icmp_count = None
 
 def ping_host_icmp(ip_str, timeout_ms=150):
     """
@@ -38,7 +41,10 @@ def ping_host_icmp(ip_str, timeout_ms=150):
         cmd = f"ping -c 1 -W 1 {ip_str}"
 
     try:
-        res = subprocess.run(cmd, shell=True, capture_output=True, text=True)
+        res = subprocess.run(cmd.split(), capture_output=True, text=True,
+                             errors="replace", timeout=max(3, timeout_ms / 1000 + 1))
+        trace = {"comando": cmd, "codigo": res.returncode,
+                 "stdout": res.stdout[:1200], "stderr": res.stderr[:500]}
         out = (res.stdout or "").lower()
         if "ttl=" in out and "inaccesible" not in out and "unreachable" not in out:
             # Extract latency
@@ -61,10 +67,10 @@ def ping_host_icmp(ip_str, timeout_ms=150):
                 except ValueError:
                     ttl = 64
 
-            return PingResult(alive=True, latency_ms=round(lat, 2), ttl=ttl)
-    except Exception:
-        pass
-    return PingResult(alive=False, latency_ms=0.0, ttl=0)
+            return PingResult(alive=True, latency_ms=round(lat, 2), ttl=ttl, command_result=trace)
+    except (OSError, subprocess.SubprocessError) as exc:
+        trace = {"comando": cmd, "error": type(exc).__name__}
+    return PingResult(command_result=trace)
 
 def ping_sweep(cidr, max_workers=64, timeout_ms=150, progress_callback=None):
     """
@@ -84,19 +90,21 @@ def ping_sweep(cidr, max_workers=64, timeout_ms=150, progress_callback=None):
     ping_details = {}
     total = max(net.num_addresses - (2 if net.prefixlen < 31 else 0), 0)
     completed = 0
+    samples = {True: [], False: []}
 
     def check(ip):
         ip_str = str(ip)
         res = ping_host_icmp(ip_str, timeout_ms)
-        if res.alive:
-            return ip_str, res
-        return ip_str, None
+        return ip_str, res
 
     # Step 1: Concurrent ping sweep
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         while batch := list(islice(hosts, 256)):
             for ip_str, res in executor.map(check, batch):
-                if res and res.alive:
+                bucket = samples[res.alive]
+                if res.command_result and len(bucket) < 5:
+                    bucket.append({**res.command_result, "respuesta_icmp": res.alive})
+                if res.alive:
                     icmp_alive.add(ip_str)
                     ping_details[ip_str] = {"latency_ms": res.latency_ms, "ttl": res.ttl}
                 completed += 1
@@ -122,4 +130,10 @@ def ping_sweep(cidr, max_workers=64, timeout_ms=150, progress_callback=None):
         list(icmp_alive.union(arp_alive)),
         key=lambda x: [int(o) for o in x.split(".") if o.isdigit()]
     )
-    return SweepResult(confirmed, details=ping_details)
+    result = SweepResult(confirmed, details=ping_details)
+    result.icmp_count = len(icmp_alive)
+    result.command_samples = samples[True] + samples[False]
+    arp_result = getattr(arp_table, "command_result", None)
+    if arp_result:
+        result.command_samples.append(arp_result)
+    return result

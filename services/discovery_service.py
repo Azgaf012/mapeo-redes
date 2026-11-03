@@ -316,7 +316,9 @@ class DiscoveryService:
                 leases = {}
                 warnings.append(f"Concesiones DHCP: {type(exc).__name__}")
             self.scan_job_repo.record_event(
-                job_id, stage, ping_respuestas=len(sweep), equipos_a_inspeccionar=len(alive),
+                job_id, stage, rango=cidr, ping_respuestas=sweep.icmp_count,
+                equipos_descubiertos=len(sweep), equipos_a_inspeccionar=len(alive),
+                muestra_comandos=sweep.command_samples,
                 mac_locales=len(local_neighbors), mac_gateway=len(gateway_neighbors),
                 concesiones_dhcp=len(leases), avisos=len(warnings),
             )
