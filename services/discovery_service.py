@@ -300,7 +300,6 @@ class DiscoveryService:
             network = ipaddress.IPv4Network(cidr, strict=False)
             if local_ip and ipaddress.IPv4Address(local_ip) in network:
                 alive.add(local_ip)
-            self.device_repo.mark_offline_or_cleanup(site_id, alive, cidr=cidr)
             arp_table = get_arp_table()
             warnings = []
             gateway_neighbors = {}
@@ -321,6 +320,14 @@ class DiscoveryService:
                 mac_locales=len(local_neighbors), mac_gateway=len(gateway_neighbors),
                 concesiones_dhcp=len(leases), avisos=len(warnings),
             )
+            if not (alive - {local_ip}):
+                self.scan_job_repo.fail(
+                    job_id,
+                    "No se detectaron otros equipos. Comprueba la conexión del PC, el rango y el aislamiento de la red.",
+                )
+                self.scan_job_repo.record_event(job_id, "sin_equipos_remotos")
+                return
+            self.device_repo.mark_offline_or_cleanup(site_id, alive, cidr=cidr)
             stage = "inspeccion"
             ips = sorted(alive, key=ipaddress.IPv4Address)
             if self.identity:
