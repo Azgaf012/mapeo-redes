@@ -14,6 +14,7 @@ def read_dhcp_leases(scope):
         return {}
     scope = str(ipaddress.IPv4Address(scope))
     command = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
         "Get-DhcpServerv4Lease -ComputerName $env:SCAN_DHCP_SERVER "
         "-ScopeId $env:NETMAP_DHCP_SCOPE -ErrorAction Stop | "
         "Select-Object @{n='IP';e={$_.IPAddress.ToString()}},HostName,ClientId | "
@@ -22,7 +23,7 @@ def read_dhcp_leases(scope):
     output = subprocess.run(
         [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
         env={**os.environ, "NETMAP_DHCP_SCOPE": scope}, capture_output=True,
-        text=True, errors="replace", timeout=20, check=True,
+        text=True, encoding="utf-8", errors="replace", timeout=20, check=True,
     ).stdout
     rows = json.loads(output or "[]")
     if isinstance(rows, dict):
@@ -38,6 +39,6 @@ def trace_route(ip):
         raise RuntimeError("tracert solo está disponible en Windows.")
     result = subprocess.run(
         [executable, "-d", "-h", "8", "-w", "500", address],
-        capture_output=True, text=True, errors="replace", timeout=18,
+        capture_output=True, text=True, encoding="oem", errors="replace", timeout=18,
     )
     return result.stdout.strip() or result.stderr.strip()

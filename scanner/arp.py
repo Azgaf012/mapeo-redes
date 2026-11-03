@@ -27,7 +27,7 @@ def get_arp_table():
     arp_map = ArpTable()
     try:
         result = subprocess.run(["arp", "-a"], capture_output=True, text=True,
-                                errors="replace", timeout=5)
+                                encoding="oem" if platform.system() == "Windows" else None, errors="replace", timeout=5)
         output = result.stdout
         arp_map.command_result = {
             "comando": "arp -a", "codigo": result.returncode,

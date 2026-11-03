@@ -42,7 +42,7 @@ def ping_host_icmp(ip_str, timeout_ms=150):
 
     try:
         res = subprocess.run(cmd.split(), capture_output=True, text=True,
-                             errors="replace", timeout=max(3, timeout_ms / 1000 + 1))
+                             encoding="oem" if is_windows else None, errors="replace", timeout=max(3, timeout_ms / 1000 + 1))
         trace = {"comando": cmd, "codigo": res.returncode,
                  "stdout": res.stdout[:1200], "stderr": res.stderr[:500]}
         out = (res.stdout or "").lower()

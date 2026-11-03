@@ -23,6 +23,7 @@ def get_routing_ip():
 def _windows_adapter_medium(interface_name):
     """Read the physical medium of one local Windows adapter."""
     command = (
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
         "$ErrorActionPreference='Stop'; "
         "Get-NetAdapter | Select-Object Name, NdisPhysicalMedium "
         "| ConvertTo-Json -Compress"
@@ -30,7 +31,7 @@ def _windows_adapter_medium(interface_name):
     try:
         result = subprocess.run(
             ["powershell.exe", "-NoProfile", "-Command", command],
-            capture_output=True, text=True, timeout=8,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=8,
             creationflags=subprocess.CREATE_NO_WINDOW,
         )
         if result.returncode:
@@ -74,8 +75,8 @@ def get_local_connection_medium(local_ip):
 def get_windows_default_gateway():
     """Extracts the default gateway and interface alias on Windows."""
     try:
-        cmd = 'powershell -NoProfile -Command "Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Select-Object -First 1 NextHop, InterfaceAlias | ConvertTo-Json"'
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, timeout=5)
+        cmd = 'powershell -NoProfile -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Select-Object -First 1 NextHop, InterfaceAlias | ConvertTo-Json"'
+        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
         if result.returncode == 0 and result.stdout.strip():
             import json
             data = json.loads(result.stdout)
@@ -87,7 +88,7 @@ def get_windows_default_gateway():
 
     # Fallback to route print
     try:
-        out = subprocess.check_output("route print 0.0.0.0", shell=True, text=True, timeout=4)
+        out = subprocess.check_output("route print 0.0.0.0", shell=True, text=True, encoding="oem", errors="replace", timeout=4)
         for line in out.splitlines():
             parts = line.strip().split()
             if len(parts) >= 5 and parts[0] == "0.0.0.0" and parts[1] == "0.0.0.0":
