@@ -11,6 +11,8 @@ from repositories.connection_repository import ConnectionRepository
 from repositories.scan_job_repository import ScanJobRepository
 from repositories.network_detail_repository import NetworkDetailRepository
 from repositories.ap_association_repository import ApAssociationRepository
+from repositories.nvr_credential_repository import NvrCredentialRepository, nvr_key
+from scanner.drivers.hikvision_nvr import HikvisionNvrDriver, fetch_cameras
 from services.discovery_service import DiscoveryService, scan_size
 from services.topology_service import TopologyService
 from services.device_service import DeviceService
@@ -38,6 +40,7 @@ def create_app(config_class=Config):
     scan_job_repo = ScanJobRepository(app.config["DATABASE_PATH"])
     detail_repo = NetworkDetailRepository(app.config["DATABASE_PATH"])
     ap_association_repo = ApAssociationRepository(app.config["DATABASE_PATH"])
+    nvr_repo = NvrCredentialRepository(app.config["DATABASE_PATH"])
 
     identity_service = None
     if app.config.get("IDENTITY_ENABLED", Config.IDENTITY_ENABLED):
@@ -48,6 +51,11 @@ def create_app(config_class=Config):
             mdns=app.config.get("IDENTITY_MDNS", Config.IDENTITY_MDNS),
             broadcast=app.config.get("IDENTITY_BROADCAST", Config.IDENTITY_BROADCAST),
             sweep_seconds=app.config.get("IDENTITY_SWEEP_SECONDS", Config.IDENTITY_SWEEP_SECONDS))
+
+    if identity_service:
+        for driver in identity_service.registry.drivers:
+            if isinstance(driver, HikvisionNvrDriver):
+                driver.store = nvr_repo
 
     # Instantiate services
     discovery_service = DiscoveryService(
@@ -246,6 +254,68 @@ def create_app(config_class=Config):
             mimetype="text/csv",
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
+
+    @app.route("/nvr")
+    def nvr_page():
+        stored = {row["key"]: row for row in nvr_repo.list_all()}
+        recorders = []
+        for device in device_repo.get_all(device_type="NVR"):
+            key = nvr_key(device["ip"], device["mac"] or "")
+            row = stored.get(key) or {}
+            cameras = [d for d in device_repo.get_all(site_id=device["site_id"], device_type="CAMERA")
+                       if f"NVR {device['ip']}" in (d["description"] or "")]
+            recorders.append({
+                "device": device, "key": key, "status": row.get("status", "pending"),
+                "detail": row.get("detail", ""), "username": row.get("username", ""),
+                "port": row.get("port") or 80, "has_credentials": row.get("has_credentials", False),
+                "checked_at": row.get("checked_at"), "cameras": len(cameras),
+            })
+        return render_template("nvr.html", recorders=recorders)
+
+    def _test_nvr(ip, mac):
+        """Try the stored account against the NVR and import the cameras it reports."""
+        row = nvr_repo.get(ip, mac)
+        if not row or not row["has_credentials"]:
+            return f"NVR {ip}: sin credenciales asignadas."
+        status, detail, peers = fetch_cameras(ip, row["username"], row["password"], row["port"] or 80)
+        nvr_repo.set_result(ip, mac, status, detail, len(peers))
+        if status != "ok":
+            return f"NVR {ip}: {detail}"
+        imported = 0
+        for device in device_repo.get_all(device_type="NVR"):
+            same = (mac and (device["mac"] or "").upper() == mac.upper()) or device["ip"] == ip
+            if same:
+                imported += discovery_service.import_nvr_cameras(device["site_id"], peers)
+                break
+        return f"NVR {ip}: {detail}; importadas {imported}."
+
+    @app.route("/nvr/credentials", methods=["POST"])
+    def nvr_save_credentials():
+        ip = (request.form.get("ip") or "").strip()
+        mac = (request.form.get("mac") or "").strip()
+        username = (request.form.get("username") or "").strip()
+        password = request.form.get("password") or ""
+        try:
+            port = int(request.form.get("port") or 80)
+        except ValueError:
+            port = 80
+        if not ip or not username or not password:
+            flash("Indica usuario y clave del NVR.", "warning")
+            return redirect(url_for("nvr_page"))
+        nvr_repo.save_credentials(ip, mac, username, password, port)
+        flash(_test_nvr(ip, mac), "info")
+        if request.form.get("apply_all"):
+            nvr_repo.apply_to_unresolved(username, password, port)
+            for other in device_repo.get_all(device_type="NVR"):
+                if other["ip"] != ip:
+                    flash(_test_nvr(other["ip"], other["mac"] or ""), "info")
+        return redirect(url_for("nvr_page"))
+
+    @app.route("/nvr/test", methods=["POST"])
+    def nvr_test():
+        flash(_test_nvr((request.form.get("ip") or "").strip(),
+                        (request.form.get("mac") or "").strip()), "info")
+        return redirect(url_for("nvr_page"))
 
     @app.route("/sites", methods=["GET", "POST"])
     def sites():

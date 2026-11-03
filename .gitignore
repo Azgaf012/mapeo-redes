@@ -58,3 +58,4 @@ unidentified_devices.csv
 driver_debug/
 plugins/**/*.dll
 inventario_red_*.csv
+nvr_secret.key

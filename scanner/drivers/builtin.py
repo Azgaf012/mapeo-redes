@@ -198,7 +198,8 @@ class MdnsDriver(Driver):
 
 def builtin_drivers(mdns_enabled=True):
     from scanner.drivers.aruba_instant import ArubaInstantDriver
+    from scanner.drivers.hikvision_nvr import HikvisionNvrDriver
 
     return [SysObjectIdDriver(), HikvisionSadpDriver(), UbiquitiDiscoveryDriver(),
-            MikrotikNeighborDriver(), ArubaInstantDriver(), PrinterMibDriver(),
+            MikrotikNeighborDriver(), ArubaInstantDriver(), HikvisionNvrDriver(), PrinterMibDriver(),
             UpnpDriver(), MdnsDriver(enabled=mdns_enabled)]

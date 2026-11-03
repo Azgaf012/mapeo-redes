@@ -509,6 +509,11 @@ class DeviceRepository:
             cursor.execute("DELETE FROM devices WHERE id = ?", (device_id,))
             return cursor.rowcount > 0
 
+    def set_status(self, device_id, status):
+        with get_db(self.db_path) as conn:
+            conn.execute("UPDATE devices SET status = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                         (status, device_id))
+
     def mark_offline_or_cleanup(self, site_id, active_ips, cidr=None):
         """Keep prior inventory; mark only scanned, absent addresses offline."""
         import ipaddress

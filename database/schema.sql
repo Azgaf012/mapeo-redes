@@ -171,3 +171,17 @@ CREATE INDEX IF NOT EXISTS idx_connections_site_id ON connections(site_id);
 CREATE INDEX IF NOT EXISTS idx_connections_source ON connections(source_device_id);
 CREATE INDEX IF NOT EXISTS idx_connections_target ON connections(target_device_id);
 CREATE INDEX IF NOT EXISTS idx_scan_jobs_site_id ON scan_jobs(site_id);
+
+-- Credenciales de NVR (una por grabador). La clave se guarda cifrada.
+CREATE TABLE IF NOT EXISTS nvr_credentials (
+    key TEXT PRIMARY KEY,              -- MAC normalizada o "ip:<ip>"
+    ip TEXT NOT NULL,
+    mac TEXT DEFAULT '',
+    username TEXT DEFAULT '',
+    password_enc TEXT DEFAULT '',
+    port INTEGER DEFAULT 80,
+    status TEXT DEFAULT 'pending',     -- pending | ok | auth_failed | unreachable | no_isapi
+    detail TEXT DEFAULT '',
+    camera_count INTEGER DEFAULT 0,
+    checked_at TIMESTAMP
+);

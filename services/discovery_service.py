@@ -250,9 +250,31 @@ class DiscoveryService:
     def _apply_controller_data(self, site_id):
         """Use what a wireless controller published about its APs."""
         for peer in self.identity.peers:
+            if peer.get("source") == "nvr":
+                self._save_nvr_camera(site_id, peer)
+                continue
             device = self.device_repo.get_by_ip(site_id, peer.get("ip") or "")
             if device:
                 self.device_repo.confirm_access_point(device["id"], "aruba_instant")
+
+    def import_nvr_cameras(self, site_id, peers):
+        for peer in peers:
+            self._save_nvr_camera(site_id, peer)
+        return len(peers)
+
+    def _save_nvr_camera(self, site_id, peer):
+        """Cameras behind an NVR's PoE switch are unreachable; store what the NVR reports."""
+        evidence = {"classification_source": "nvr", "detected_type": "CAMERA",
+                    "nvr_ip": peer.get("nvr_ip", ""), "nvr_channel": peer.get("channel", "")}
+        device_id = self.device_repo.upsert_discovered(site_id, {
+            "ip": peer["ip"], "mac": peer.get("mac") or "", "hostname": peer.get("hostname", ""),
+            "vendor": "Hikvision", "model": peer.get("model", ""),
+            "serial_number": peer.get("serial", ""), "device_type": "CAMERA",
+            "os_info": "", "scan_evidence": json.dumps(evidence, ensure_ascii=False),
+            "description": f"Canal {peer.get('channel', '?')} del NVR {peer.get('nvr_ip', '')}",
+        })
+        if device_id and peer.get("online") is False:
+            self.device_repo.set_status(device_id, "OFFLINE")
 
     def _run_scan_pipeline(self, job_id, site_id, cidr, gateway, local_ip,
                            local_mac, credentials):

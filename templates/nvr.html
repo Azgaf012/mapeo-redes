@@ -1,0 +1,64 @@
+{% extends "base.html" %}
+{% block title %}NVR y cámaras - Mapeo de Red Escolar{% endblock %}
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <h3 class="fw-bold mb-1"><i class="bi bi-camera-video text-primary"></i> Grabadores (NVR)</h3>
+    <p class="text-muted mb-0">
+      Las cámaras conectadas al switch PoE de un NVR no son visibles desde la red. Asigna una cuenta
+      de solo lectura a cada NVR: se guarda cifrada y los próximos recorridos la reutilizan para
+      listar sus cámaras automáticamente.
+    </p>
+  </div>
+  <div class="col-12">
+    {% if not recorders %}
+      <div class="alert alert-secondary">Aún no se ha detectado ningún NVR. Ejecuta un escaneo primero.</div>
+    {% endif %}
+    <div class="row g-3">
+    {% for r in recorders %}
+      {% set badge = {'ok': 'success', 'pending': 'warning', 'auth_failed': 'danger', 'unreachable': 'secondary', 'no_isapi': 'secondary'}[r.status] %}
+      {% set label = {'ok': 'Conectado', 'pending': ('Pendiente de probar' if r.has_credentials else 'Pendiente de credenciales'), 'auth_failed': 'Credenciales rechazadas', 'unreachable': 'Sin conexión', 'no_isapi': 'Sin ISAPI'}[r.status] %}
+      <div class="col-lg-6">
+        <div class="card h-100">
+          <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <div>
+                <h5 class="fw-bold mb-0">{{ r.device.ip }}</h5>
+                <small class="text-muted">{{ r.device.site_name }} · {{ r.device.model or r.device.hostname or 'NVR' }}</small>
+              </div>
+              <span class="badge bg-{{ badge }}">{{ label }}</span>
+            </div>
+            <div class="small text-muted mb-3">
+              Cámaras importadas: <strong>{{ r.cameras }}</strong>
+              {% if r.detail %} · {{ r.detail }}{% endif %}
+              {% if r.checked_at %} · {{ r.checked_at[:16] }}{% endif %}
+            </div>
+            <form method="POST" action="{{ url_for('nvr_save_credentials') }}" class="row g-2">
+              <input type="hidden" name="ip" value="{{ r.device.ip }}">
+              <input type="hidden" name="mac" value="{{ r.device.mac or '' }}">
+              <div class="col-5"><input name="username" class="form-control form-control-sm" placeholder="Usuario" value="{{ r.username }}" required></div>
+              <div class="col-5"><input name="password" type="password" class="form-control form-control-sm" placeholder="Clave" autocomplete="new-password" required></div>
+              <div class="col-2"><input name="port" type="number" class="form-control form-control-sm" value="{{ r.port }}" title="Puerto HTTP"></div>
+              <div class="col-12 d-flex justify-content-between align-items-center">
+                <div class="form-check small">
+                  <input class="form-check-input" type="checkbox" name="apply_all" value="1" id="all{{ loop.index }}">
+                  <label class="form-check-label" for="all{{ loop.index }}">Usar también en los demás NVR pendientes o rechazados</label>
+                </div>
+                <button class="btn btn-sm btn-primary"><i class="bi bi-save"></i> Guardar y probar</button>
+              </div>
+            </form>
+            {% if r.has_credentials %}
+            <form method="POST" action="{{ url_for('nvr_test') }}" class="mt-2">
+              <input type="hidden" name="ip" value="{{ r.device.ip }}">
+              <input type="hidden" name="mac" value="{{ r.device.mac or '' }}">
+              <button class="btn btn-sm btn-outline-secondary"><i class="bi bi-arrow-repeat"></i> Reintentar con la cuenta guardada</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+    {% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}
