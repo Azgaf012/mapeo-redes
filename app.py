@@ -425,6 +425,17 @@ def create_app(config_class=Config):
             return jsonify({"error": str(exc)}), 400
         return jsonify(data)
 
+    @app.get("/topology/packet-tracer.pkt")
+    def export_packet_tracer():
+        from services.packet_tracer_export import build_packet_tracer
+
+        site_id = active_site_id()
+        if not site_id:
+            return jsonify(error="No hay una sede para exportar."), 404
+        data = topology_service.get_cytoscape_data(site_id, view="physical")
+        return Response(build_packet_tracer(data["elements"]), mimetype="application/octet-stream",
+                        headers={"Content-Disposition": "attachment; filename=topologia.pkt"})
+
     @app.route("/identity/unidentified.csv")
     def export_unidentified():
         identity = discovery_service.identity
