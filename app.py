@@ -155,6 +155,7 @@ def create_app(config_class=Config):
         stats = device_repo.count_by_type(selected_site_id)
         return render_template(
             "topology.html",
+            latest_job=scan_job_repo.get_latest_by_site(selected_site_id) if selected_site_id else None,
             sites=sites,
             selected_site_id=selected_site_id,
             stats=stats
@@ -400,6 +401,20 @@ def create_app(config_class=Config):
         except ValueError as exc:
             return jsonify({"error": str(exc)}), 400
         return jsonify({"job_id": job_id, "status": "RUNNING"})
+
+    @app.get("/api/scan/<int:job_id>/diagnostics.json")
+    def download_scan_diagnostics(job_id):
+        job = scan_job_repo.get_by_id(job_id)
+        if not job or job["site_id"] != active_site_id():
+            return jsonify(error="Escaneo no encontrado."), 404
+        report = jsonify(
+            version=1, escaneo=job_id, estado=job["status"], progreso=job["progress"],
+            inicio_utc=job["started_at"], fin_utc=job["completed_at"],
+            eventos=scan_job_repo.get_events(job_id),
+        )
+        report.headers["Content-Disposition"] = f"attachment; filename=diagnostico-escaneo-{job_id}.json"
+        report.headers["Cache-Control"] = "no-store"
+        return report
 
     @app.route("/api/scan/status/<int:job_id>")
     def api_scan_status(job_id):

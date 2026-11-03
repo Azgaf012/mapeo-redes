@@ -110,6 +110,15 @@ CREATE TABLE IF NOT EXISTS scan_jobs (
     FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS scan_job_events (
+    id INTEGER PRIMARY KEY,
+    job_id INTEGER NOT NULL REFERENCES scan_jobs(id) ON DELETE CASCADE,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    stage TEXT NOT NULL,
+    metrics TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_scan_job_events_job ON scan_job_events(job_id);
+
 CREATE TABLE IF NOT EXISTS interface_vlans (
     interface_id INTEGER NOT NULL REFERENCES interfaces(id) ON DELETE CASCADE,
     vlan_id INTEGER NOT NULL REFERENCES vlans(id) ON DELETE CASCADE,

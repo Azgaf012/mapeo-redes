@@ -110,6 +110,9 @@
             {% if latest_job %}
                 <p class="small mb-1">{{ latest_job.target_cidr }} · {{ latest_job.status }} · {{ latest_job.discovered_count }} equipos</p>
                 <p class="text-muted small mb-1">{{ latest_job.current_step }}</p>
+                <a class="small" href="{{ url_for('download_scan_diagnostics', job_id=latest_job.id) }}">
+                    Descargar diagnóstico del escaneo
+                </a>
                 {% if latest_job.warnings %}<p class="small text-warning-emphasis mb-0">Avisos: {{ latest_job.warnings }}</p>{% endif %}
             {% else %}<p class="text-muted small mb-0">Aún no hay escaneos registrados.</p>{% endif %}
         </div></div>

@@ -1,3 +1,5 @@
+import json
+
 from database.connection import get_db
 
 class ScanJobRepository:
@@ -48,6 +50,22 @@ class ScanJobRepository:
                     error_message = ?, completed_at = CURRENT_TIMESTAMP
                 WHERE id = ?
             """, (str(error_message), job_id))
+
+    def record_event(self, job_id, stage, **metrics):
+        with get_db(self.db_path) as conn:
+            conn.execute(
+                "INSERT INTO scan_job_events(job_id, stage, metrics) VALUES (?, ?, ?)",
+                (job_id, stage, json.dumps(metrics)),
+            )
+
+    def get_events(self, job_id):
+        with get_db(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT created_at, stage, metrics FROM scan_job_events WHERE job_id=? ORDER BY id",
+                (job_id,),
+            ).fetchall()
+        return [{"timestamp_utc": row["created_at"], "stage": row["stage"],
+                 "metrics": json.loads(row["metrics"])} for row in rows]
 
     def get_by_id(self, job_id):
         with get_db(self.db_path) as conn:

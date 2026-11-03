@@ -282,7 +282,9 @@ class DiscoveryService:
 
     def _run_scan_pipeline(self, job_id, site_id, cidr, gateway, local_ip,
                            local_mac, credentials):
+        stage = "preparacion"
         try:
+            self.scan_job_repo.record_event(job_id, stage, snmp_version=credentials.get("version"))
             self.scan_job_repo.update_progress(job_id, 10, f"Preparando {cidr}...")
             network_id = self.network_repo.get_or_create(site_id, cidr, gateway=gateway)
 
@@ -292,6 +294,7 @@ class DiscoveryService:
                     self.scan_job_repo.update_progress(
                         job_id, percent, f"Buscando equipos: {done}/{total} IP")
 
+            stage = "descubrimiento"
             sweep = ping_sweep(cidr, progress_callback=sweep_progress)
             alive = set(sweep)
             network = ipaddress.IPv4Network(cidr, strict=False)
@@ -313,6 +316,12 @@ class DiscoveryService:
             except (OSError, ValueError, subprocess.SubprocessError) as exc:
                 leases = {}
                 warnings.append(f"Concesiones DHCP: {type(exc).__name__}")
+            self.scan_job_repo.record_event(
+                job_id, stage, ping_respuestas=len(sweep), equipos_a_inspeccionar=len(alive),
+                mac_locales=len(local_neighbors), mac_gateway=len(gateway_neighbors),
+                concesiones_dhcp=len(leases), avisos=len(warnings),
+            )
+            stage = "inspeccion"
             ips = sorted(alive, key=ipaddress.IPv4Address)
             if self.identity:
                 self.scan_job_repo.update_progress(job_id, 44, "Descubriendo fabricantes...")
@@ -322,6 +331,9 @@ class DiscoveryService:
 
             neighbors = []
             snmp_devices = []
+            metrics = {"equipos_guardados": 0, "errores_equipo": 0, "errores_snmp": 0,
+                       "interfaces": 0, "mac_aprendidas": 0, "switches_con_tabla_mac": 0,
+                       "sin_identificar": 0, "servicios_identificados": 0}
             with ThreadPoolExecutor(max_workers=self.host_workers) as pool:
                 futures = {pool.submit(self._inspect_host, ip, gateway, local_ip,
                                        local_mac, arp_table, sweep.details,
@@ -337,20 +349,33 @@ class DiscoveryService:
                             evidence["dhcp_lease"] = leases[ip]
                         payload["scan_evidence"] = json.dumps(evidence, ensure_ascii=False)
                         device_id = self.device_repo.upsert_discovered(site_id, payload)
+                        metrics["equipos_guardados"] += 1
+                        metrics["sin_identificar"] += payload["device_type"] == "UNKNOWN"
+                        metrics["servicios_identificados"] += len(evidence.get("services") or [])
                         if inventory.get("has_snmp"):
                             self.detail_repo.save_inventory(site_id, device_id, inventory)
                             snmp_devices.append(ip)
+                            metrics["interfaces"] += len(inventory.get("interfaces") or [])
+                            learned = len(inventory.get("mac_learnings") or [])
+                            metrics["mac_aprendidas"] += learned
+                            metrics["switches_con_tabla_mac"] += bool(learned and payload["device_type"] == "SWITCH")
                         neighbors.extend(found_neighbors)
                         if warning:
+                            metrics['errores_snmp'] += 1
                             warnings.append(warning)
                     except Exception as exc:
-                        warnings.append(f"{ip}: {exc.__class__.__name__}: {exc}")
+                        metrics["errores_equipo"] += 1
+                        warnings.append(f"{ip}: {exc.__class__.__name__}")
                     if done % 5 == 0 or done == len(ips):
                         percent = 45 + round(43 * done / max(len(ips), 1))
                         self.scan_job_repo.update_progress(
                             job_id, percent, f"Analizando equipos: {done}/{len(ips)}",
                             len(ips))
 
+            self.scan_job_repo.record_event(
+                job_id, stage, **metrics, respuestas_snmp=len(snmp_devices), vecinos=len(neighbors)
+            )
+            stage = "topologia"
             self.scan_job_repo.update_progress(job_id, 90, "Resolviendo vecinos y puertos...")
             if self.identity:
                 self._apply_controller_data(site_id)
@@ -369,6 +394,12 @@ class DiscoveryService:
                     active_devices,
                 )
             self.connection_repo.clear_discovered_for_site(site_id)
+            self.scan_job_repo.record_event(
+                job_id, stage, enlaces_fisicos_sede=len(self.detail_repo.get_links(site_id)),
+                vecinos_pendientes_sede=len(self.detail_repo.get_unresolved(site_id)),
+                avisos=len(warnings),
+            )
             self.scan_job_repo.complete(job_id, len(ips), "; ".join(warnings[:20]))
         except Exception as exc:
             self.scan_job_repo.fail(job_id, str(exc))
+            self.scan_job_repo.record_event(job_id, "error", etapa=stage, tipo=type(exc).__name__)

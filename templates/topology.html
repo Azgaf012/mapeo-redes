@@ -94,6 +94,10 @@
     </div>
     <details class="card border-0 shadow-sm mt-3 p-3">
         <summary class="fw-semibold">Administrar datos del mapa</summary>
+        {% if latest_job %}
+        <a class="btn btn-sm btn-outline-secondary mt-2 align-self-start"
+           href="{{ url_for('download_scan_diagnostics', job_id=latest_job.id) }}">Descargar diagnóstico del escaneo</a>
+        {% endif %}
         <a class="btn btn-sm btn-outline-secondary mt-2 align-self-start"
            href="{{ url_for('export_packet_tracer') }}">Descargar para Packet Tracer (.pkt)</a>
         <p class="small text-muted mt-2 mb-0">
