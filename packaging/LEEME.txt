@@ -1,5 +1,5 @@
 NetMap Escolar para Windows 10/11 de 64 bits
-Version 1.0.0
+Version 1.0.1
 
 1. Copia el instalador a la computadora de la sede y ejecutalo.
 2. Abre NetMap Escolar desde el acceso directo.

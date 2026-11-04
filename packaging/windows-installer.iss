@@ -1,4 +1,4 @@
-#define AppVersion "1.0.0"
+#define AppVersion "1.0.1"
 [Setup]
 AppId={{D8E50B33-C649-4A85-BA4E-675B15F73121}
 AppName=NetMap Escolar

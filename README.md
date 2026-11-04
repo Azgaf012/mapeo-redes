@@ -201,7 +201,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Falló Inno Setup.' }
 
 El resultado de la versión actual queda en estos archivos y carpetas.
 
-- `dist/NetMapEscolar-Instalador-1.0.0-Windows-x64.exe` es el archivo único que se entrega a las sedes.
+- `dist/NetMapEscolar-Instalador-1.0.1-Windows-x64.exe` es el archivo único que se entrega a las sedes.
 - `dist/NetMapEscolar/` contiene la aplicación empaquetada. Para ejecutarla directamente, conserva toda la carpeta junto a `NetMapEscolar.exe`.
 - `build/` contiene archivos intermedios. Tanto `build/` como `dist/` están excluidos de Git.
 

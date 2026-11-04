@@ -142,13 +142,13 @@ function formatEdgeLabel(edgeData) {
     return edgeData.evidence || "";
 }
 
-function buildArchitecturalPositions(elements, activeGroup) {
+function buildArchitecturalPositions(elements, activeGroup, sections = []) {
     const nodes = elements.filter(el => el.group === "nodes");
     const edges = elements.filter(el => el.group === "edges");
     const positions = {};
     const CARD_GAP_X = 212;
     const ROW_GAP_Y = 98;
-    const TIER_GAP_Y = 136;
+    const TIER_GAP_Y = 180;
     const MAX_COLS = 6;
 
     const placeRows = (list, startY, cols = MAX_COLS, centerX = 0) => {
@@ -236,12 +236,17 @@ function buildArchitecturalPositions(elements, activeGroup) {
         if (!childrenByParent.has(parent)) childrenByParent.set(parent, []);
         childrenByParent.get(parent).push(byId.get(child));
     }
+    const addSection = (id, label, members, color) => {
+        if (members.length) sections.push({ id: `section:${id}`, label,
+            members: members.map(node => node.data.id), color });
+    };
     const grouped = new Set([...childrenByParent.values()].flat());
+    addSection("core", "Salida de la red", tier1Core, "#e0f2fe");
     let currentY = placeRows(tier0NetVlan, 0);
     currentY = placeRows(tier1Core, currentY);
     // Put switch peers on the same row so their links stay above the AP rows.
     const switchWidths = tier2Switches.map(parent =>
-        Math.max(1, Math.min(MAX_COLS, childrenByParent.get(parent.data.id)?.length || 0)) * CARD_GAP_X
+        Math.max(1, Math.min(MAX_COLS, childrenByParent.get(parent.data.id)?.length || 0)) * CARD_GAP_X + 140
     );
     let left = -switchWidths.reduce((total, width) => total + width, 0) / 2;
     let afterSwitches = currentY;
@@ -250,20 +255,31 @@ function buildArchitecturalPositions(elements, activeGroup) {
         const center = left + width / 2;
         const childY = placeRows([parent], currentY, 1, center);
         const children = childrenByParent.get(parent.data.id) || [];
+        addSection(`switch:${parent.data.id}`,
+            `Switch ${parent.data.ip || parent.data.name || parent.data.id} · AP asociados`,
+            [parent, ...children], "#ecfdf5");
         afterSwitches = Math.max(afterSwitches,
             placeRows(children.sort(sortByPortThenIp), childY, MAX_COLS, center));
         left += width;
     });
-    currentY = afterSwitches;
+    currentY = afterSwitches + 120;
     for (const recorder of recorders) {
         currentY = placeRows([recorder], currentY);
         const cameras = childrenByParent.get(recorder.data.id) || [];
         currentY = placeRows(cameras.sort(sortByPortThenIp), currentY);
+        addSection(`nvr:${recorder.data.id}`,
+            `Grabador ${recorder.data.ip || recorder.data.id} · Cámaras por canal`,
+            [recorder, ...cameras], "#fdf2f8");
+        currentY += 120;
     }
 
     const remaining = nodes.filter(n => !positions[n.data.id] && !grouped.has(n));
     for (const type of ["ACCESS_POINT", "CAMERA"]) {
-        currentY = placeRows(remaining.filter(n => n.data.device_type === type), currentY);
+        const ungrouped = remaining.filter(n => n.data.device_type === type);
+        currentY = placeRows(ungrouped, currentY);
+        addSection(type, type === "ACCESS_POINT" ? "AP · Sin switch único en esta vista"
+            : "Cámaras · Sin canal NVR en esta vista", ungrouped, "#f8fafc");
+        if (ungrouped.length) currentY += 120;
     }
     placeRows(remaining.filter(n => !positions[n.data.id]), currentY);
     return positions;
@@ -564,10 +580,24 @@ document.addEventListener("DOMContentLoaded", () => {
         renderUnresolved(data.unresolved_neighbors || []);
         renderDeviceLegend(data.counts);
 
-        const positions = buildArchitecturalPositions(elements, active);
+        const sections = [];
+        const positions = buildArchitecturalPositions(elements, active, sections);
+        let graphElements = elements;
+        if (view === "physical" && !active) {
+            const parentById = new Map(sections.flatMap(section =>
+                section.members.map(id => [id, section.id])));
+            graphElements = elements.map(element => element.group === "nodes" && parentById.has(element.data.id)
+                ? { ...element, data: { ...element.data, parent: parentById.get(element.data.id) } }
+                : element);
+            graphElements.push(...sections.map(section => ({ group: "nodes", data: {
+                id: section.id, kind: "map_section", label: section.label,
+                section_color: section.color, card_label: section.label,
+                badge_icon: "", icon_color: "#cbd5e1"
+            } })));
+        }
         graph = cytoscape({
             container: canvas,
-            elements,
+            elements: graphElements,
             style: [
                 { selector: "node", style: {
                     "shape": "round-rectangle",
@@ -586,7 +616,7 @@ document.addEventListener("DOMContentLoaded", () => {
                     "label": "data(card_label)",
                     "color": "#0f172a",
                     "font-size": 10.5,
-                    "font-weight": "600",
+                    "font-weight": "bold",
                     "text-wrap": "wrap",
                     "text-max-width": 124,
                     "text-valign": "center",
@@ -662,7 +692,7 @@ document.addEventListener("DOMContentLoaded", () => {
                       "width": 4,
                       "label": "data(edge_label)",
                       "font-size": 9.5,
-                      "font-weight": "700",
+                      "font-weight": "bold",
                       "color": "#065f46",
                       "text-background-color": "#dcfce7",
                       "text-background-opacity": 0.95,
@@ -690,6 +720,25 @@ document.addEventListener("DOMContentLoaded", () => {
                       "line-style": "dotted", "target-arrow-shape": "none", "width": 2 } },
                 { selector: 'edge[discovery_method = "MAP_SUMMARY"][parent_type = "ap"]',
                   style: { "line-color": "#047857" } },
+                { selector: 'node[kind = "map_section"]', style: {
+                    "shape": "round-rectangle", "background-color": "data(section_color)",
+                    "background-image": "none", "background-opacity": 0.8,
+                    "border-width": 1, "border-color": "#cbd5e1",
+                    "padding": 36, "label": "data(label)", "font-size": 16,
+                    "text-valign": "top", "text-halign": "left",
+                    "text-margin-x": 0, "text-margin-y": -10, "text-max-width": 700,
+                    "font-weight": "bold", "compound-sizing-wrt-labels": "include", "z-index": 0
+                } },
+                { selector: "edge", style: { "label": "" } },
+                { selector: 'edge[discovery_method = "MAC_PORT"]', style: {
+                    "curve-style": "unbundled-bezier", "control-point-distances": -140,
+                    "control-point-weights": 0.4, "opacity": 0.35
+                } },
+                { selector: "edge:selected, edge.map-focused", style: {
+                    "label": "data(edge_label)", "opacity": 1,
+                    "text-background-color": "#ffffff", "text-background-opacity": 1,
+                    "text-background-padding": 4, "font-size": 12
+                } },
                 { selector: ".map-muted", style: { "opacity": 0.22 } }
             ],
             layout: {
@@ -705,22 +754,28 @@ document.addEventListener("DOMContentLoaded", () => {
         if (pendingLabel) pendingLabel.textContent = pending;
         graph.on("tap", "node", event => {
             const node = event.target.data();
+            if (node.kind === "map_section") {
+                graph.fit(event.target.descendants(), 45);
+                return;
+            }
             if (node.kind === "map_group") {
                 expandedGroup = node.group_id;
                 groupPage = 0;
                 render(lastData);
                 return;
             }
-            graph.elements().removeClass("map-muted");
+            graph.elements().removeClass("map-muted map-focused");
+            event.target.connectedEdges().addClass("map-focused");
             if (view === "physical" && event.target.connectedEdges().length) {
-                graph.elements().difference(event.target.closedNeighborhood()).addClass("map-muted");
+                graph.elements().difference(event.target.closedNeighborhood())
+                    .filter(element => !element.isParent()).addClass("map-muted");
             }
             inspect(node, false);
         });
         graph.on("tap", "edge", event => inspect(event.target.data(), true));
         graph.on("tap", event => {
             if (event.target === graph) {
-                graph.elements().removeClass("map-muted");
+                graph.elements().removeClass("map-muted map-focused");
                 document.getElementById("sp-title").textContent = "Selecciona un equipo o enlace";
                 document.getElementById("sp-details").replaceChildren();
                 document.getElementById("sp-btn-detail").classList.add("d-none");
