@@ -142,8 +142,98 @@ En **Switches**, registra la IP de administración y un perfil SNMP de lectura (
 **Probar tablas SNMP** consulta interfaces, VLAN, tabla MAC y vecinos LLDP/CDP. Un resultado vacío puede indicar falta de datos, soporte o permisos. La IP registrada se consulta automáticamente en cada escaneo de la sede, aunque esté fuera del rango o no responda a ping. El PC debe tener acceso a su red de administración. Registrar una IP existente corrige su tipo a SWITCH y conserva la corrección manual.
 
 
-### Instalador de Windows
+## Generar el instalador de Windows
 
 La distribución de Windows incluye Python, las dependencias y los archivos de la interfaz. Cada instalación comienza con una base nueva y conserva sus datos en `%LOCALAPPDATA%\NetMapEscolar`. La ventana de escritorio abre el navegador y permite cerrar el servidor local. Nmap sigue siendo opcional.
 
-Para generar el instalador en Windows de 64 bits, instala las dependencias de `packaging/requirements-build.txt`, agrega el compilador `ISCC.exe` de Inno Setup al PATH y ejecuta `packaging/build-windows.ps1`. El resultado queda en `dist`. Las instrucciones para las sedes están en `packaging/LEEME.txt`. Se empaquetan únicamente las plantillas, los recursos estáticos y el esquema de base de datos. Los inventarios y las claves locales quedan fuera de la distribución.
+### Requisitos de la computadora que compila
+
+- Windows 10 u 11 de 64 bits.
+- Git y Python 3.13 de 64 bits, que es la versión usada para validar este paquete.
+- [Inno Setup 7](https://jrsoftware.org/isdl.php), con su compilador `ISCC.exe`.
+- Acceso a Internet para descargar las dependencias durante la preparación.
+
+Las computadoras de las sedes solo necesitan ejecutar el instalador.
+
+### Clonar y preparar el entorno
+
+Abre PowerShell y ejecuta estos comandos desde la carpeta donde quieras clonar el proyecto.
+
+```powershell
+git clone https://github.com/Azgaf012/mapeo-redes.git
+cd mapeo-redes
+
+py -3.13 -m venv .venv-build
+.\.venv-build\Scripts\python.exe -m pip install --upgrade pip
+.\.venv-build\Scripts\python.exe -m pip install -r packaging/requirements-build.txt
+```
+
+Agrega el entorno de compilación y el compilador de Inno Setup al PATH de esta sesión. Ajusta `$innoDir` a la carpeta donde instalaste Inno Setup.
+
+```powershell
+$innoDir = 'C:\Program Files\Inno Setup 7'
+$buildPythonDir = Join-Path (Get-Location) '.venv-build\Scripts'
+$env:Path = "$buildPythonDir;$innoDir;$env:Path"
+
+python --version
+Get-Command ISCC.exe
+```
+
+Ambas comprobaciones deben funcionar antes de compilar.
+
+### Compilar
+
+Desde la raíz del proyecto, ejecuta el script.
+
+```powershell
+.\packaging\build-windows.ps1
+```
+
+El script usa PyInstaller para empaquetar la aplicación y después ejecuta Inno Setup para crear el instalador. Si PowerShell bloquea archivos `.ps1`, puedes ejecutar esas dos operaciones directamente.
+
+```powershell
+.\.venv-build\Scripts\python.exe -m PyInstaller packaging/NetMapEscolar.spec --noconfirm
+if ($LASTEXITCODE -ne 0) { throw 'Falló PyInstaller.' }
+
+& "$innoDir\ISCC.exe" packaging/windows-installer.iss
+if ($LASTEXITCODE -ne 0) { throw 'Falló Inno Setup.' }
+```
+
+El resultado de la versión actual queda en estos archivos y carpetas.
+
+- `dist/NetMapEscolar-Instalador-1.0.0-Windows-x64.exe` es el archivo único que se entrega a las sedes.
+- `dist/NetMapEscolar/` contiene la aplicación empaquetada. Para ejecutarla directamente, conserva toda la carpeta junto a `NetMapEscolar.exe`.
+- `build/` contiene archivos intermedios. Tanto `build/` como `dist/` están excluidos de Git.
+
+### Validar antes de distribuir
+
+Comprueba el ejecutable empaquetado con una carpeta de datos de prueba independiente.
+
+```powershell
+$testDataDir = Join-Path (Get-Location) '.tools\prueba-instalador'
+$packagedExe = Join-Path (Get-Location) 'dist\NetMapEscolar\NetMapEscolar.exe'
+
+$testProcess = Start-Process -FilePath $packagedExe -ArgumentList @(
+    '--smoke-test',
+    '--data-dir',
+    ('"' + $testDataDir + '"')
+) -WindowStyle Hidden -PassThru -Wait
+
+if ($testProcess.ExitCode -ne 0) {
+    throw "Falló la validación. Revisa $testDataDir\aplicacion.log"
+}
+Get-Content (Join-Path $testDataDir 'smoke-test.json')
+```
+
+La prueba comprueba las pantallas principales, los recursos de la interfaz, la generación de un archivo Packet Tracer y el cifrado de un perfil SNMP de prueba. Después instala el `.exe` en una computadora de prueba, abre el acceso directo y comprueba el escaneo en su red.
+
+### Generar una actualización
+
+1. Actualiza el código y vuelve a instalar `packaging/requirements-build.txt` si cambiaron las dependencias.
+2. Cambia `AppVersion` en `packaging/windows-installer.iss`. El nombre del instalador usa esa versión.
+3. Conserva el mismo `AppId` para que Inno Setup reconozca la instalación existente.
+4. Compila y valida nuevamente antes de entregar el archivo.
+
+Los datos y las claves se guardan fuera de la carpeta del programa. La actualización y la desinstalación conservan la carpeta de datos del usuario. Las instrucciones de uso y respaldo para las sedes se incluyen en [packaging/LEEME.txt](packaging/LEEME.txt).
+
+Se empaquetan las plantillas, los recursos estáticos y el esquema SQLite. Los inventarios y las claves locales quedan fuera de la distribución. Los archivos de compilación y los recursos de `static/vendor/` deben estar incluidos en el repositorio para poder generar el instalador desde una clonación nueva. El instalador generado actualmente carece de firma digital.

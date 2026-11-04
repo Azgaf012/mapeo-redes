@@ -331,7 +331,9 @@ def create_app(config_class=Config):
             devices = device_repo.get_all(site_id=site_id)
             source = next(device for device in devices if device["ip"] == ip)
             detail_repo.save_neighbors(site_id, source, inventory.get("neighbors", []), devices)
-        flash("Prueba completada. Revisa el resultado de las tablas.", "info")
+            flash(f"El switch {ip} respondió a SNMP. Revisa qué tablas devolvieron datos.", "success")
+        else:
+            flash(f"No se obtuvo información SNMP de {ip}. Revisa la versión, la comunidad o usuario y el acceso desde este PC.", "warning")
         return redirect(url_for("switches_page"))
 
     @app.post("/switches/remove")

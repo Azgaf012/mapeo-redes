@@ -92,3 +92,8 @@ def test_no_snmp_response_does_not_mark_switch_online(switch_app, monkeypatch):
     assert service.read_registered_switch(1, store.list_by_site(1, True)[0]) is None
     assert service.device_repo.get_by_ip(1, "198.51.100.82") is None
     assert store.list_by_site(1)[0]["status"] == "no_response"
+    with app.test_client() as client:
+        response = client.post("/switches/test", data={"ip": "198.51.100.82"}, follow_redirects=True)
+        assert b"No se obtuvo" in response.data
+        assert b"alert-warning" in response.data
+        assert b"Prueba completada" not in response.data
