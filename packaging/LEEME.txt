@@ -1,0 +1,25 @@
+NetMap Escolar para Windows 10/11 de 64 bits
+Version 1.0.0
+
+1. Copia el instalador a la computadora de la sede y ejecutalo.
+2. Abre NetMap Escolar desde el acceso directo.
+3. Se abrira el navegador. Manten abierta la ventana de NetMap mientras lo uses.
+4. Conecta la computadora a la red de la sede y revisa el rango antes de escanear.
+5. Registra los perfiles de lectura en Switches y los accesos de los grabadores en NVR.
+
+Python y las dependencias estan incluidos. La interfaz funciona sin Internet.
+Nmap es opcional. Cuando no esta disponible, se usa el escaner TCP integrado.
+La deteccion de versiones de servicios con Nmap requiere Nmap instalado.
+El acceso SNMP y a los grabadores depende de su configuracion y del acceso de red.
+
+DATOS Y RESPALDOS
+La instalacion nueva empieza sin inventarios ni credenciales de otras sedes.
+Los datos se guardan por usuario en %LOCALAPPDATA%\NetMapEscolar.
+El boton "Abrir carpeta de datos" permite encontrar esa carpeta.
+Cierra NetMap antes de copiar la carpeta para un respaldo.
+Conserva juntos network.db, nvr_secret.key y session_secret.key, ademas de los CSV
+de correcciones. La clave nvr_secret.key permite descifrar los perfiles guardados.
+La actualizacion y la desinstalacion del programa conservan esta carpeta.
+
+La aplicacion escucha solo en la computadora local y usa un puerto libre.
+Para detenerla, usa "Cerrar NetMap". Cada sede configura sus propios accesos.

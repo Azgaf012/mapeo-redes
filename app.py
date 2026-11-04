@@ -276,6 +276,70 @@ def create_app(config_class=Config):
             headers={"Content-Disposition": f"attachment; filename={filename}"}
         )
 
+    @app.get("/switches")
+    def switches_page():
+        site_id = active_site_id()
+        return render_template("switches.html",
+            switches=discovery_service.switch_credentials.list_by_site(site_id),
+            detected=device_repo.get_all(site_id=site_id, device_type="SWITCH"))
+
+    @app.post("/switches/credentials")
+    def switch_save_credentials():
+        site_id = active_site_id()
+        try:
+            ip = str(ipaddress.IPv4Address(request.form.get("ip", "").strip()))
+            version = request.form.get("version", "2c")
+            if version not in {"2c", "3"}:
+                raise ValueError("Versión SNMP inválida.")
+            credentials = {"version": version}
+            if version == "2c":
+                community = request.form.get("community", "")
+                if not community:
+                    raise ValueError("Indica la comunidad SNMP. No es la clave de la página web.")
+                credentials["community"] = community
+            else:
+                username = request.form.get("username", "").strip()
+                if not username:
+                    raise ValueError("Indica el usuario SNMPv3.")
+                protocol = request.form.get("auth_protocol", "SHA256")
+                if protocol not in {"SHA1", "SHA256"}:
+                    raise ValueError("Protocolo inválido.")
+                credentials.update(username=username, auth_protocol=protocol,
+                                   auth_key=request.form.get("auth_key", ""),
+                                   priv_key=request.form.get("priv_key", ""))
+                if credentials["priv_key"] and not credentials["auth_key"]:
+                    raise ValueError("La privacidad AES requiere autenticación.")
+            discovery_service.switch_credentials.save(site_id, ip, credentials)
+            existing = device_repo.get_by_ip(site_id, ip)
+            if existing:
+                device_repo.update_manual_fields(existing["id"], {"device_type": "SWITCH"})
+            flash("Perfil guardado y cifrado. Se consultará en cada escaneo.", "success")
+        except ValueError as exc:
+            flash(str(exc), "warning")
+        return redirect(url_for("switches_page"))
+
+    @app.post("/switches/test")
+    def switch_test():
+        site_id = active_site_id()
+        ip = request.form.get("ip", "")
+        profile = next((row for row in discovery_service.switch_credentials.list_by_site(
+            site_id, include_credentials=True) if row["ip"] == ip), None)
+        if not profile:
+            return jsonify(error="Switch no registrado."), 404
+        inventory = discovery_service.read_registered_switch(site_id, profile)
+        if inventory:
+            devices = device_repo.get_all(site_id=site_id)
+            source = next(device for device in devices if device["ip"] == ip)
+            detail_repo.save_neighbors(site_id, source, inventory.get("neighbors", []), devices)
+        flash("Prueba completada. Revisa el resultado de las tablas.", "info")
+        return redirect(url_for("switches_page"))
+
+    @app.post("/switches/remove")
+    def switch_remove():
+        discovery_service.switch_credentials.remove(active_site_id(), request.form.get("ip", ""))
+        flash("Perfil SNMP eliminado.", "success")
+        return redirect(url_for("switches_page"))
+
     @app.route("/nvr")
     def nvr_page():
         stored = {row["key"]: row for row in nvr_repo.list_all()}

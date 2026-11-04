@@ -241,21 +241,27 @@ async def _collect(ip, credentials):
                   "sys_name": _text(bindings[1][1]),
                   "sys_object_id": _text(bindings[3][1]),
                   "uptime_seconds": uptime_ticks // 100 if uptime_ticks is not None else None}
+        table_results = {}
         for key, oid in OIDS.items():
             if key.startswith("sys_"):
                 continue
             values = {}
+            table_error = False
             async for error, status, _, bindings in bulk_walk_cmd(
                     engine, auth, target, context, 0, 20,
                     ObjectType(ObjectIdentity(oid)), lookupMib=False,
                     lexicographicMode=False, maxRows=4096):
                 if error or status:
+                    table_error = True
                     break
                 for binding in bindings:
                     name = _text(binding[0])
                     if name.startswith(oid + "."):
                         values[name[len(oid) + 1:]] = binding[1]
             tables[key] = values
+            table_results[key] = {"status": "error" if table_error else ("rows" if values else "empty"),
+                                  "rows": len(values)}
+        result["table_results"] = table_results
         result.update(build_inventory(tables))
         return result
 

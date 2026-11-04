@@ -1,3 +1,4 @@
+import os
 import socket
 import subprocess
 import platform
@@ -76,7 +77,7 @@ def get_windows_default_gateway():
     """Extracts the default gateway and interface alias on Windows."""
     try:
         cmd = 'powershell -NoProfile -Command "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-NetRoute -DestinationPrefix \'0.0.0.0/0\' | Select-Object -First 1 NextHop, InterfaceAlias | ConvertTo-Json"'
-        result = subprocess.run(cmd, shell=True, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
+        result = subprocess.run(cmd, shell=True, creationflags=0x08000000 if os.name == "nt" else 0, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5)
         if result.returncode == 0 and result.stdout.strip():
             import json
             data = json.loads(result.stdout)
@@ -88,7 +89,7 @@ def get_windows_default_gateway():
 
     # Fallback to route print
     try:
-        out = subprocess.check_output("route print 0.0.0.0", shell=True, text=True, encoding="oem", errors="replace", timeout=4)
+        out = subprocess.check_output("route print 0.0.0.0", shell=True, creationflags=0x08000000 if os.name == "nt" else 0, text=True, encoding="oem", errors="replace", timeout=4)
         for line in out.splitlines():
             parts = line.strip().split()
             if len(parts) >= 5 and parts[0] == "0.0.0.0" and parts[1] == "0.0.0.0":

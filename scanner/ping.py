@@ -1,3 +1,4 @@
+import os
 import subprocess
 import platform
 import ipaddress
@@ -41,7 +42,7 @@ def ping_host_icmp(ip_str, timeout_ms=150):
         cmd = f"ping -c 1 -W 1 {ip_str}"
 
     try:
-        res = subprocess.run(cmd.split(), capture_output=True, text=True,
+        res = subprocess.run(cmd.split(), creationflags=0x08000000 if os.name == "nt" else 0, capture_output=True, text=True,
                              encoding="oem" if is_windows else None, errors="replace", timeout=max(3, timeout_ms / 1000 + 1))
         trace = {"comando": cmd, "codigo": res.returncode,
                  "stdout": res.stdout[:1200], "stderr": res.stderr[:500]}

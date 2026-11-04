@@ -59,3 +59,7 @@ driver_debug/
 plugins/**/*.dll
 inventario_red_*.csv
 nvr_secret.key
+
+# Windows packaging output
+build/
+dist/

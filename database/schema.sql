@@ -194,3 +194,14 @@ CREATE TABLE IF NOT EXISTS nvr_credentials (
     camera_count INTEGER DEFAULT 0,
     checked_at TIMESTAMP
 );
+
+
+CREATE TABLE IF NOT EXISTS switch_credentials (
+    site_id INTEGER NOT NULL REFERENCES sites(id) ON DELETE CASCADE,
+    ip TEXT NOT NULL,
+    credentials_enc TEXT NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    tables_json TEXT NOT NULL DEFAULT '{}',
+    checked_at TIMESTAMP,
+    PRIMARY KEY(site_id, ip)
+);

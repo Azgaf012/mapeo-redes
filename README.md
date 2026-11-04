@@ -133,3 +133,17 @@ Los barridos de difusión solo alcanzan el segmento donde corre la aplicación.
 python -m pytest -q
 node --test tests/map_overview.test.js
 ```
+
+
+### Switches administrables
+
+En **Switches**, registra la IP de administración y un perfil SNMP de lectura (v2c o v3). El perfil completo se cifra con la misma clave local del NVR, `nvr_secret.key`, junto a la base SQLite. Conserva esa clave al mover o respaldar la base. Los secretos se introducen de nuevo para reemplazar un perfil y no se muestran en pantalla ni en diagnósticos.
+
+**Probar tablas SNMP** consulta interfaces, VLAN, tabla MAC y vecinos LLDP/CDP. Un resultado vacío puede indicar falta de datos, soporte o permisos. La IP registrada se consulta automáticamente en cada escaneo de la sede, aunque esté fuera del rango o no responda a ping. El PC debe tener acceso a su red de administración. Registrar una IP existente corrige su tipo a SWITCH y conserva la corrección manual.
+
+
+### Instalador de Windows
+
+La distribución de Windows incluye Python, las dependencias y los archivos de la interfaz. Cada instalación comienza con una base nueva y conserva sus datos en `%LOCALAPPDATA%\NetMapEscolar`. La ventana de escritorio abre el navegador y permite cerrar el servidor local. Nmap sigue siendo opcional.
+
+Para generar el instalador en Windows de 64 bits, instala las dependencias de `packaging/requirements-build.txt`, agrega el compilador `ISCC.exe` de Inno Setup al PATH y ejecuta `packaging/build-windows.ps1`. El resultado queda en `dist`. Las instrucciones para las sedes están en `packaging/LEEME.txt`. Se empaquetan únicamente las plantillas, los recursos estáticos y el esquema de base de datos. Los inventarios y las claves locales quedan fuera de la distribución.

@@ -22,7 +22,7 @@ def read_dhcp_leases(scope):
     )
     output = subprocess.run(
         [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
-        env={**os.environ, "NETMAP_DHCP_SCOPE": scope}, capture_output=True,
+        env={**os.environ, "NETMAP_DHCP_SCOPE": scope}, creationflags=0x08000000 if os.name == "nt" else 0, capture_output=True,
         text=True, encoding="utf-8", errors="replace", timeout=20, check=True,
     ).stdout
     rows = json.loads(output or "[]")
@@ -39,6 +39,6 @@ def trace_route(ip):
         raise RuntimeError("tracert solo está disponible en Windows.")
     result = subprocess.run(
         [executable, "-d", "-h", "8", "-w", "500", address],
-        capture_output=True, text=True, encoding="oem", errors="replace", timeout=18,
+        creationflags=0x08000000 if os.name == "nt" else 0, capture_output=True, text=True, encoding="oem", errors="replace", timeout=18,
     )
     return result.stdout.strip() or result.stderr.strip()

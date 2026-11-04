@@ -1,0 +1,73 @@
+{% extends "base.html" %}
+{% block title %}Switches administrables{% endblock %}
+{% block content %}
+<h2 class="fw-bold">Switches administrables</h2>
+<p class="text-muted">Guarda un perfil SNMP de lectura por switch. Cada escaneo consultará estas IP aunque estén fuera del rango seleccionado.</p>
+<details class="card p-3 mb-4" open>
+  <summary class="fw-semibold">Registrar o reemplazar perfil SNMP</summary>
+  <form method="post" action="{{ url_for('switch_save_credentials') }}" class="row g-3 mt-1">
+    <div class="col-md-4">
+      <label for="switch-ip" class="form-label">IP de administración</label>
+      <input id="switch-ip" name="ip" class="form-control" list="detected-switches" required placeholder="192.168.48.82">
+      <datalist id="detected-switches">{% for d in detected %}<option value="{{ d.ip }}">{{ d.hostname or d.model }}</option>{% endfor %}</datalist>
+    </div>
+    <div class="col-md-4">
+      <label for="switch-version" class="form-label">Versión SNMP</label>
+      <select id="switch-version" name="version" class="form-select"><option value="2c">SNMPv2c</option><option value="3">SNMPv3</option></select>
+    </div>
+    <div id="switch-v2" class="col-md-4">
+      <label for="switch-community" class="form-label">Comunidad de lectura</label>
+      <input id="switch-community" name="community" type="password" class="form-control" autocomplete="new-password">
+    </div>
+    <div id="switch-v3" class="col-12 d-none">
+      <div class="row g-3">
+        <div class="col-md-3"><label for="switch-user" class="form-label">Usuario</label><input id="switch-user" name="username" class="form-control" autocomplete="off"></div>
+        <div class="col-md-3"><label for="switch-auth-protocol" class="form-label">Autenticación</label><select id="switch-auth-protocol" name="auth_protocol" class="form-select"><option value="SHA256">SHA-256</option><option value="SHA1">SHA-1</option></select></div>
+        <div class="col-md-3"><label for="switch-auth" class="form-label">Clave de autenticación (opcional)</label><input id="switch-auth" name="auth_key" type="password" class="form-control" autocomplete="new-password"></div>
+        <div class="col-md-3"><label for="switch-priv" class="form-label">Clave AES (opcional)</label><input id="switch-priv" name="priv_key" type="password" class="form-control" autocomplete="new-password"></div>
+      </div>
+    </div>
+    <p class="small text-muted mb-0">SNMPv2c usa una comunidad, incluso cuando la página web del switch abre sin clave. Confirma la comunidad en la configuración del equipo. Registrar una IP como switch corrige su tipo en el inventario.</p>
+    <div class="col-12"><button class="btn btn-primary">Guardar perfil cifrado</button></div>
+  </form>
+</details>
+{% for s in switches %}
+<div class="card mb-3"><div class="card-body">
+  <h3 class="h5">{{ s.ip }}</h3>
+  <p class="small">
+    {{ {'pending':'Pendiente de probar','ok':'SNMP respondió','no_response':'Sin respuesta SNMP o acceso rechazado','error':'Error de consulta','key_error':'No se pudieron descifrar las credenciales'}.get(s.status, s.status) }}
+    {% if s.checked_at %} · {{ s.checked_at }} UTC{% endif %}
+  </p>
+  {% if s.tables %}
+  <div class="table-responsive"><table class="table table-sm">
+    <caption>Una lectura vacía puede indicar tabla sin datos, sin soporte o acceso restringido.</caption>
+    <thead><tr><th>Tabla</th><th>Resultado</th><th>Filas</th></tr></thead>
+    <tbody>
+    {% for key, label in [('if_name','Nombres de interfaces'),('if_descr','Descripción de interfaces'),('vlan_name','VLAN'),('vlan_fdb','VLAN y base MAC'),('fdb_port','MAC por VLAN'),('bridge_fdb_port','MAC BRIDGE-MIB'),('lldp_name','Vecinos LLDP'),('cdp_name','Vecinos CDP')] %}
+      {% set t=s.tables.get(key) %}
+      <tr><td>{{ label }}</td><td>{{ {'rows':'Datos recibidos','empty':'Lectura vacía','error':'Error o lectura incompleta'}.get(t.status, 'Sin resultado') if t else 'Sin resultado' }}</td><td>{{ t.rows if t else '—' }}</td></tr>
+    {% endfor %}
+    </tbody>
+  </table></div>
+  {% endif %}
+  <div class="d-flex gap-2">
+    <form method="post" action="{{ url_for('switch_test') }}"><input type="hidden" name="ip" value="{{ s.ip }}"><button class="btn btn-outline-primary">Probar tablas SNMP</button></form>
+    <form method="post" action="{{ url_for('switch_remove') }}"><input type="hidden" name="ip" value="{{ s.ip }}"><button class="btn btn-outline-secondary">Quitar perfil</button></form>
+  </div>
+</div></div>
+{% else %}<p class="text-muted">Registra la IP de un switch para comenzar.</p>{% endfor %}
+{% endblock %}
+{% block scripts %}
+<script>
+const version = document.getElementById("switch-version");
+function updateSwitchFields() {
+    const v3 = version.value === "3";
+    document.getElementById("switch-v2").classList.toggle("d-none", v3);
+    document.getElementById("switch-v3").classList.toggle("d-none", !v3);
+    document.getElementById("switch-community").required = !v3;
+    document.getElementById("switch-user").required = v3;
+}
+version.addEventListener("change", updateSwitchFields);
+updateSwitchFields();
+</script>
+{% endblock %}

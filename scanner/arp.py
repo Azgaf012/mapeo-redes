@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 import platform
@@ -26,7 +27,7 @@ def get_arp_table():
     """
     arp_map = ArpTable()
     try:
-        result = subprocess.run(["arp", "-a"], capture_output=True, text=True,
+        result = subprocess.run(["arp", "-a"], creationflags=0x08000000 if os.name == "nt" else 0, capture_output=True, text=True,
                                 encoding="oem" if platform.system() == "Windows" else None, errors="replace", timeout=5)
         output = result.stdout
         arp_map.command_result = {

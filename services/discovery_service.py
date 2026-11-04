@@ -9,6 +9,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from config import Config
 from repositories.network_detail_repository import NetworkDetailRepository
+from repositories.switch_credential_repository import SwitchCredentialRepository
 from repositories.ap_association_repository import ApAssociationRepository
 from services.ap_association_service import ApAssociationService
 from scanner.arp import get_arp_table
@@ -54,7 +55,50 @@ class DiscoveryService:
             device_repo, ApAssociationRepository(device_repo.db_path)) if device_repo else None)
         self.max_hosts = max_hosts or Config.MAX_SCAN_HOSTS
         self.host_workers = host_workers or Config.SCAN_HOST_WORKERS
+        self.switch_credentials = SwitchCredentialRepository(device_repo.db_path) if device_repo else None
         self.identity = identity_service  # built by create_app; None disables it
+
+    def read_registered_switch(self, site_id, profile):
+        ip = profile["ip"]
+        credentials = profile.get("credentials")
+        if not credentials:
+            self.switch_credentials.set_result(site_id, ip, "key_error", {})
+            return None
+        try:
+            inventory = collect_snmp_inventory(ip, credentials)
+        except Exception as exc:
+            # Store only the exception class, never credential-bearing messages.
+            self.switch_credentials.set_result(site_id, ip, "error", {"exception": type(exc).__name__})
+            return None
+        tables = inventory.get("table_results") or {}
+        if not inventory.get("has_snmp"):
+            self.switch_credentials.set_result(site_id, ip, "no_response", tables)
+            return None
+        self.switch_credentials.set_result(site_id, ip, "ok", tables)
+        existing = self.device_repo.get_by_ip(site_id, ip)
+        payload = {
+            "ip": ip, "device_type": "SWITCH", "hostname": inventory.get("sys_name") or "",
+            "model": inventory.get("model") or "", "serial_number": inventory.get("serial_number") or "",
+        }
+        if existing:
+            payload["mac"] = existing["mac"]
+            payload["network_id"] = existing["network_id"]
+        metadata = {}
+        if existing:
+            try:
+                metadata = json.loads(existing.get("scan_evidence") or "{}")
+            except (ValueError, TypeError):
+                pass
+        if not isinstance(metadata, dict):
+            metadata = {}
+        metadata.update({"classification_source": "registered_switch", "snmp_status": "available",
+                         "snmp_neighbors": inventory.get("neighbors") or [],
+                         "snmp_sys_name": inventory.get("sys_name") or "",
+                         "snmp_sys_object_id": inventory.get("sys_object_id") or ""})
+        payload["scan_evidence"] = json.dumps(metadata, ensure_ascii=False)
+        device_id = self.device_repo.upsert_discovered(site_id, payload)
+        self.detail_repo.save_inventory(site_id, device_id, inventory)
+        return inventory
 
     def start_scan_async(self, site_id, custom_cidr=None, custom_gateway=None,
                          snmp_community="public", clean_previous_subnets=False,
@@ -296,6 +340,8 @@ class DiscoveryService:
 
             stage = "descubrimiento"
             sweep = ping_sweep(cidr, progress_callback=sweep_progress)
+            profiles = self.switch_credentials.list_by_site(site_id, include_credentials=True)
+            registered_ips = {profile["ip"] for profile in profiles}
             alive = set(sweep)
             network = ipaddress.IPv4Network(cidr, strict=False)
             if local_ip and ipaddress.IPv4Address(local_ip) in network:
@@ -322,7 +368,7 @@ class DiscoveryService:
                 mac_locales=len(local_neighbors), mac_gateway=len(gateway_neighbors),
                 concesiones_dhcp=len(leases), avisos=len(warnings),
             )
-            if not (alive - {local_ip}):
+            if not (alive - {local_ip}) and not profiles:
                 self.scan_job_repo.fail(
                     job_id,
                     "No se detectaron otros equipos. Comprueba la conexión del PC, el rango y el aislamiento de la red.",
@@ -331,7 +377,7 @@ class DiscoveryService:
                 return
             self.device_repo.mark_offline_or_cleanup(site_id, alive, cidr=cidr)
             stage = "inspeccion"
-            ips = sorted(alive, key=ipaddress.IPv4Address)
+            ips = sorted(alive - registered_ips, key=ipaddress.IPv4Address)
             if self.identity:
                 self.scan_job_repo.update_progress(job_id, 44, "Descubriendo fabricantes...")
                 self.identity.begin_scan(local_ip)
@@ -381,6 +427,22 @@ class DiscoveryService:
                             job_id, percent, f"Analizando equipos: {done}/{len(ips)}",
                             len(ips))
 
+            for profile in profiles:
+                inventory = self.read_registered_switch(site_id, profile)
+                if inventory:
+                    snmp_devices.append(profile["ip"])
+                    neighbors.extend(dict(row, source_ip=profile["ip"]) for row in inventory.get("neighbors", []))
+                    metrics["equipos_guardados"] += 1
+                    metrics["interfaces"] += len(inventory.get("interfaces") or [])
+                    learned = len(inventory.get("mac_learnings") or [])
+                    metrics["mac_aprendidas"] += learned
+                    metrics["switches_con_tabla_mac"] += bool(learned)
+                else:
+                    warnings.append(f"Switch registrado {profile['ip']}: consulta SNMP sin completar")
+                self.scan_job_repo.record_event(
+                    job_id, "switch_registrado", ip=profile["ip"], respuesta_snmp=bool(inventory),
+                    tablas=inventory.get("table_results", {}) if inventory else {},
+                )
             self.scan_job_repo.record_event(
                 job_id, stage, **metrics, respuestas_snmp=len(snmp_devices), vecinos=len(neighbors)
             )
@@ -408,7 +470,7 @@ class DiscoveryService:
                 vecinos_pendientes_sede=len(self.detail_repo.get_unresolved(site_id)),
                 avisos=len(warnings),
             )
-            self.scan_job_repo.complete(job_id, len(ips), "; ".join(warnings[:20]))
+            self.scan_job_repo.complete(job_id, metrics["equipos_guardados"], "; ".join(warnings[:20]))
         except Exception as exc:
             self.scan_job_repo.fail(job_id, str(exc))
             self.scan_job_repo.record_event(job_id, "error", etapa=stage, tipo=type(exc).__name__)
